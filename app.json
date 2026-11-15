@@ -1,0 +1,17 @@
+{
+  "name": "DomoNote",
+  "slug": "domonote",
+  "category": "productivity",
+  "tagline": "Your Personal AI Secretary | Privacy-first local AI workspace for notes and meetings.",
+  "logo_file": "public/official_domonote.png",
+  "screenshots": [
+    "store/screenshots/01-dashboard.png",
+    "store/screenshots/02-notes.png",
+    "store/screenshots/03-meetings.png",
+    "store/screenshots/04-settings.png"
+  ],
+  "description": "DomoNote is a privacy-first, on-device personal AI secretary and productivity workspace designed to run directly on your hardware.\n\n### What It Does\nDomoNote combines intelligent audio transcription, meeting minute synthesis, rich markdown note-taking, document analysis, and calendar coordination into a single unified desktop workspace—without ever sending your private data to third-party cloud servers.\n\n### Key Features\n- **Offline Meeting Transcription**: Capture meetings with live speech recognition, multi-speaker diarization, and automatic action item extraction powered by local AI.\n- **Rich Markdown Notes & Mind Mapping**: Organize thoughts with an intuitive block editor, full-text search, bidirectional linking, and dynamic mind map visualizations.\n- **Document Summaries & Local RAG**: Ask questions against your PDFs, documents, and reference manuals with private retrieval-augmented generation.\n- **Integrated Schedule & Agenda**: Manage tasks, upcoming events, and calendar milestones with offline-first persistence via IndexedDB.\n- **Local AI Engine Support**: Seamlessly connects to on-device models via Ollama (Llama 3.2, Whisper, Mistral, Gemma 2, DeepSeek-R1) or works as a distraction-free offline workspace.\n- **Air-Gapped Privacy**: Zero trackers, zero cloud telemetry, and zero subscription paywalls.\n\n### Who It's For\n- **Founders & Executives**: Keep precise meeting minutes, action items, and strategic decisions confidential.\n- **Developers & Researchers**: Maintain local technical notes, architecture specs, and paper summaries with lightning-fast recall.\n- **Professionals with Strict Privacy Mandates**: Healthcare, legal, and financial practitioners who require 100% offline compliance.\n\n### How to Get Started\n1. Open DomoNote from Anna to enter the main Workspace Dashboard.\n2. Click \"New Note\" or \"New Meeting\" from the sidebar to start capturing thoughts or audio minutes.\n3. Organize your entries using tags, markdown formatting, or document attachments.\n4. Optionally connect your local Ollama instance in Settings for automated AI summaries and translation.",
+  "homepage_url": "https://domonote.vercel.app",
+  "support_url": "mailto:parejasarronkian@gmail.com",
+  "privacy_url": "https://domonote.vercel.app/privacy-policy"
+}

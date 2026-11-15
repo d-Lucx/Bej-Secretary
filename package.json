@@ -1,0 +1,47 @@
+{
+  "name": "domonote",
+  "private": true,
+  "version": "1.0.3",
+  "type": "module",
+  "scripts": {
+    "build:bej": "tsc --noEmit --project tsconfig.bej.json && vite build --config vite.bej.config.ts",
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "postbuild": "node scripts/generate-sitemap.js && node scripts/prerender.js && node scripts/audit-client-bundles.js",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "setup:ollama": "bash scripts/setup-ollama.sh",
+    "setup:windows": "scripts\\setup-windows.bat",
+    "build:windows": "node scripts/build-windows.js",
+    "build:anna": "ANNA=1 vite build && node -e \"const fs = require('fs'); fs.rmSync('bundle', { recursive: true, force: true }); fs.cpSync('dist', 'bundle', { recursive: true }); console.log('✅ Prepared bundle/ directory for anna-app push.');\"",
+    "start": "node scripts/start.js"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "dexie": "^4.0.11",
+    "dexie-react-hooks": "^1.1.7",
+    "dompurify": "^3.2.4",
+    "jspdf": "^2.5.2",
+    "lucide-react": "^1.16.0",
+    "pdfjs-dist": "^4.10.38",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.3",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^2.6.0"
+  },
+  "devDependencies": {
+    "@anna-ai/cli": "^0.1.57",
+    "@types/dompurify": "^3.0.5",
+    "@types/node": "^22.13.10",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.3",
+    "vite": "^6.2.0",
+    "vitest": "^3.0.8"
+  }
+}

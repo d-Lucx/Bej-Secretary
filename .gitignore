@@ -1,0 +1,73 @@
+downloads/
+.cache/
+.bej-local/
+dist-bej/
+bej-companion/__pycache__/
+
+# Upstream reference checkout (source is imported at workspace root)
+DomoNote/
+
+# Upstream ignore rules
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Dependencies
+node_modules
+dist
+bundle
+dist-ssr
+*.local
+*.tsbuildinfo
+vite.config.d.ts
+vite.config.js
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Python Companion
+local-companion/__pycache__
+local-companion/venv
+local-companion/.venv
+*.pyc
+
+# Chrome Extension builds
+browser-extension/*.zip
+
+# Desktop & Native builds
+*.app
+*.dmg
+!public/downloads/*.dmg
+desktop/DomoNote
+AppIcon.iconset/
+*.pdf
+**/bin/
+**/obj/
+*.user
+**/bundle.zip
+desktop/bundle/
+public/downloads/*.exe
+public/downloads/*.zip
+# public/downloads binary installers tracked for direct Vercel & native download delivery
+!public/downloads/*.dmg
+!public/downloads/*.AppImage
+!public/downloads/*.deb
+!public/downloads/*.tar.gz
+dist/downloads/
+
