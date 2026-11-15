@@ -12,11 +12,12 @@ import { PlanChange } from './plan-change';
 import { Task, Choice, Plan } from './planning-types';
 import { TaskOptions, PlanTask } from './task-planning';
 import { usePlanProgress } from './use-plan-progress';
+import { WebNotes } from './web-notes';
 
 type Status = BejStatus;
 
 function App() {
-  const [tab, setTab] = useState<'today' | 'sources' | 'connections' | 'reminders' | 'capture'>(() => { const requested=new URLSearchParams(location.search).get('view'); return ['sources','connections','reminders','capture'].includes(requested || '') ? requested as 'sources'|'connections'|'reminders'|'capture' : 'today'; });
+  const [tab, setTab] = useState<'today' | 'sources' | 'connections' | 'reminders' | 'capture' | 'web'>(() => { const requested=new URLSearchParams(location.search).get('view'); return ['sources','connections','reminders','capture','web'].includes(requested || '') ? requested as 'sources'|'connections'|'reminders'|'capture'|'web' : 'today'; });
   const [status, setStatus] = useState<Status | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [choices, setChoices] = useState<Record<string, Choice>>({});
@@ -73,14 +74,14 @@ function App() {
       <a className="brand" href="#main" aria-label="Bej workspace"><span className="brand-mark">b.</span><span>bej<span className="brand-sub">Your local assistant</span></span></a>
       <div className="workspace-label">WORKSPACE</div>
       <nav aria-label="Workspace">{([
-        ['today', LayoutDashboard, 'Today'], ['sources', FolderOpen, 'Source inbox'], ['connections', Link2, 'Connections'], ['reminders', CalendarDays, 'Reminders'], ['capture', FileText, 'Manual capture'],
+        ['today', LayoutDashboard, 'Today'], ['sources', FolderOpen, 'Source inbox'], ['connections', Link2, 'Connections'], ['reminders', CalendarDays, 'Reminders'], ['capture', FileText, 'Manual capture'], ['web', FileText, 'Web notes'],
       ] as const).map(([key, Icon, label]) => <button key={key} className={`nav-item ${tab === key ? 'active' : ''}`} aria-current={tab === key ? 'page' : undefined} onClick={() => setTab(key)}><Icon size={18} aria-hidden="true" />{label}{key === 'sources' && selected > 0 && <span className="count">{selected}</span>}</button>)}</nav>
       <div className="sidebar-bottom"><ShieldCheck size={22} aria-hidden="true" /><strong>A little more private.</strong><p>Your notes and planning stay on this laptop. Connections are separate.</p><span className="local-indicator"><i /> Local workspace</span></div>
     </aside>
     <div className="content-shell">
       <header className="topbar"><span><LockKeyhole size={14} aria-hidden="true" /> Personal workspace</span><span>{recording && <button className="recording-indicator" onClick={()=>setTab('capture')}>Recording · open capture controls</button>}Manila <b>UTC+8</b></span></header>
       <main id="main" tabIndex={-1}>
-        <div className="page-heading"><div><div className="eyebrow">{tab === 'today' ? 'MAKE ROOM FOR WHAT MATTERS' : tab === 'sources' ? 'FROM YOUR OBSIDIAN VAULT' : 'LOCAL FIRST. CONNECT BY CHOICE.'}</div><h1>{tab === 'today' ? 'Your day, with a plan.' : tab === 'sources' ? 'A place to begin.' : tab === 'reminders' ? 'Your reminders.' : tab === 'capture' ? 'Keep the useful moments.' : 'Your connections.'}</h1><p>{tab === 'today' ? 'Choose what matters today. Let Bej find room for it.' : tab === 'sources' ? 'Review candidates before they become commitments.' : 'See what is ready, what leaves your laptop, and what comes next.'}</p></div>{(tab === 'today' || tab === 'sources') && <button className="button secondary" onClick={scan} disabled={!!busy}><RefreshCw size={16} aria-hidden="true" />{busy === 'scan' ? 'Reading notes…' : scanned ? 'Rescan vault' : 'Read my vault'}</button>}</div>
+        <div className="page-heading"><div><div className="eyebrow">{tab === 'today' ? 'MAKE ROOM FOR WHAT MATTERS' : tab === 'sources' ? 'FROM YOUR OBSIDIAN VAULT' : 'LOCAL FIRST. CONNECT BY CHOICE.'}</div><h1>{tab === 'today' ? 'Your day, with a plan.' : tab === 'sources' ? 'A place to begin.' : tab === 'reminders' ? 'Your reminders.' : tab === 'capture' ? 'Keep the useful moments.' : tab === 'web' ? 'Keep a page worth saving.' : 'Your connections.'}</h1><p>{tab === 'today' ? 'Choose what matters today. Let Bej find room for it.' : tab === 'sources' ? 'Review candidates before they become commitments.' : tab === 'web' ? 'Choose the text. Review the note. Save it to your vault.' : 'See what is ready, what leaves your laptop, and what comes next.'}</p></div>{(tab === 'today' || tab === 'sources') && <button className="button secondary" onClick={scan} disabled={!!busy}><RefreshCw size={16} aria-hidden="true" />{busy === 'scan' ? 'Reading notes…' : scanned ? 'Rescan vault' : 'Read my vault'}</button>}</div>
         {error && <div className="message error" role="alert">{error}</div>}
         {notice && <div className="message" role="status">{notice}</div>}
         {editingTask && (tab === 'today' || tab === 'sources') && <div id="source-edit-review"><SourceEdit key={`${editingTask.id}-${completingTask}`} task={editingTask} initialCompleted={completingTask} busy={busy} run={run} close={() => setEditingTask(null)} applied={reviewNeeded => { setEditingTask(null); setTasks([]); setChoices({}); setScanned(false); refreshProgress(); setNotice(reviewNeeded ? 'Source edit applied with a private backup. Could not refresh reminders; review vault access and the queue.' : 'Source edit applied with a private backup. Pending reminders refreshed. Existing Outlook blocks remain unchanged. Rescan before building another draft.'); }} /></div>}
@@ -112,6 +113,7 @@ function App() {
         </section>}
         {tab === 'connections' && <Connections status={status} busy={busy} day={day} run={run} onStatus={setStatus} notify={setNotice} />}
         {tab === 'reminders' && <Reminders busy={busy} run={run} notify={setNotice} />}
+        <WebNotes active={tab === 'web'} busy={busy} run={run} notify={setNotice} vaultName={status?.vaultName} />
         <CapturePanel active={tab === 'capture'} busy={busy} run={run} notify={setNotice} onRecording={setRecording} />
         <footer className="workspace-footer"><span>Bej · built on DomoNote</span><span>{recording ? 'A manually started recording is active.' : 'Capture stays manual. Nothing is recording.'}</span></footer>
       </main>

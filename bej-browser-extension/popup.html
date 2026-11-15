@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bej Web Notes</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <header><p class="eyebrow">BEJ · LOCAL CAPTURE</p><h1>Web notes</h1><p>Choose text, review it, then save a new note.</p></header>
+  <details><summary>Connect to desktop Bej</summary>
+    <p>Copy this extension ID into Bej → Web notes, then generate a pairing code.</p>
+    <code id="extension-id"></code>
+    <label for="pair-code">One-use pairing code (expires in five minutes)</label>
+    <input id="pair-code" type="password" autocomplete="off" spellcheck="false">
+    <div class="actions"><button id="pair" type="button">Pair with Bej</button><button id="forget" type="button">Forget local pairing</button></div>
+    <p>To revoke access, use Revoke in desktop Bej. Forgetting only removes this browser's credential.</p>
+  </details>
+  <p id="pair-status" role="status"></p>
+  <section aria-label="Manual capture"><h2>1. Choose text</h2>
+    <button id="selection" class="primary" type="button">Capture selected text</button>
+    <button id="page" type="button">Capture visible page text instead</button>
+    <p>Nothing is read until you click. No selection fallback. Browser pages and PDFs are unsupported; paste text in Bej instead.</p>
+  </section>
+  <section id="editor" hidden><h2>2. Review and edit</h2>
+    <p id="clipping" role="status"></p>
+    <label for="title">Title (up to 500 characters)</label><input id="title" maxlength="500">
+    <label for="url">Source HTTP(S) URL (fragment removed)</label><input id="url" maxlength="4000" type="url" spellcheck="false">
+    <label for="text">Captured text (up to 50,000 characters)</label><textarea id="text" maxlength="50000" rows="8" spellcheck="false"></textarea>
+    <button id="preview" type="button">Create local save preview</button>
+  </section>
+  <section id="frozen" hidden><h2>3. Approve this note</h2>
+    <h3 id="frozen-title"></h3><p id="frozen-url" class="break"></p><pre id="frozen-text"></pre>
+    <p>Destination: <strong id="destination"></strong></p><p id="warning"></p>
+    <p>This preview expires after 15 minutes. Saving creates a note; it does not edit source notes or accept tasks.</p>
+    <button id="save" class="primary" type="button" disabled>Save approved preview</button>
+  </section>
+  <p id="status" role="status" aria-live="polite"></p>
+  <footer>Only the local companion receives reviewed text. No cloud, history monitoring, or background capture. Unsaved text disappears when this popup closes.</footer>
+  <script type="module" src="popup.js"></script>
+</body></html>

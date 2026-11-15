@@ -9,6 +9,7 @@ This checkout starts from DomoNote. Bej now includes a dedicated local planner, 
 - [Upstream baseline and initial gap analysis](UPSTREAM.md)
 - [Discord bot and private-channel setup](DISCORD_SETUP.md)
 - [Future improvements and browser capture](FUTURE_IMPROVEMENTS.md)
+- [Install and pair Bej Web Notes for Chrome/Edge](bej-browser-extension/README.md)
 - [Design and current scope](docs/superpowers/specs/2026-11-14-bej-planner-design.md)
 
 ## Run the Bej planner
@@ -67,11 +68,19 @@ An elapsed **MM:SS** counter shows active recording time for microphone and scre
 
 Microphone recordings can be transcribed using the installed local tiny Whisper model. The local speech test recognized a synthetic sentence in approximately 3.9 seconds, without microphone access or cloud transcription. Screen recording currently has no audio; transcription is offered for microphone recordings. Pin `av==16.0.1`: the latest PyAV release removed an argument Faster-Whisper 1.2.1 requires.
 
+## Web notes
+
+Open **Web notes** to paste a page title, HTTP(S) source URL and selected text. Choose **Preview new note**, review the frozen fields and **Bej Captures/Web** destination, then save. Editing any field requires a new preview. The companion records the URL without downloading it; fragments are removed and query parameters remain visible for review. Captured HTML/Markdown is literal reference text and does not become a task. Existing notes and Outlook blocks are untouched.
+
+For deliberate selection/page-text capture, manually install the separate [bej-browser-extension](bej-browser-extension/README.md), copy its ID into Web notes, generate a pairing code, and enter that code in the extension. A new code immediately revokes the previous connection. The exact approved extension origin receives a capture-only token; it cannot read the vault/library, delete captures or access workspace/Outlook/Discord/Ollama APIs. **Revoke browser access** invalidates it. The app does not install extensions or enable inherited installation/CORS routes.
+
+Exact normalized title/URL/text/mode repeats reuse the saved note, including after restart. A durable save reservation prevents a second file after an interrupted confirmation. Unchanged generated notes/local records can be deleted only after their exact deletion preview; modified notes stay protected. A missing note's local record can be removed separately. Retention is until explicit deletion; SSDs or external backups may retain copies. Only pending saves retain full text in private SQLite; saved captures retain metadata/hash while full text lives in the vault note. Unsaved app drafts are kept in the open page and can be cleared; popup text disappears on close.
+
 ## Current limits and verification
 
 Drafts and reminder states persist in private SQLite; **Open a saved draft** restores one in the UI. Calendar availability is cached, dated, and visibly marked stale offline. Source/recording data, credentials, model caches, and generated plans are excluded from Git.
 
-Still future: manual webpage-to-note capture (selected in FUTURE_IMPROVEMENTS.md), screenshot OCR/SOP generation, document-format ingestion in the dedicated Bej UI, richer meeting summaries/action extraction, and custom travel/overnight availability rules. Routine quiet hours remain fixed at 10 PM–6 AM unless an explicit future notification-exception policy is configured. This is a usable first assistant, not a claim that every roadmap capability is complete.
+Still future: screenshot OCR/SOP generation, document-format ingestion in the dedicated Bej UI, richer meeting summaries/action extraction, opt-in webpage task extraction, and custom travel/overnight availability rules. Routine quiet hours remain fixed at 10 PM–6 AM unless an explicit future notification-exception policy is configured. This is a usable first assistant, not a claim that every roadmap capability is complete.
 
 Verification: `npm test`, `npm run build:bej`, and `./.bej-local/venv/Scripts/python.exe -m unittest discover -s bej-companion -p 'test_*.py'`. Restricted sandboxes may require normal Windows thread/socket access for API tests. Windows link fixtures are skipped where OS permissions forbid creating links.
 

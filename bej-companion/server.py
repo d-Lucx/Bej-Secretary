@@ -1,4 +1,4 @@
-"""Dedicated local Bej runtime. No inherited extension routes or CORS grants."""
+"""Dedicated local Bej runtime with an isolated, scoped browser-capture bridge."""
 from __future__ import annotations
 
 import json
@@ -30,6 +30,9 @@ from reflow import reflow_plan
 from task_progress import plan_progress
 from planning_metadata import source_due
 from calendar_task_ids import resolve_calendar_ids
+from web_notes import WebNotes
+from web_bridge import WebBridge
+from web_routes import install_web_routes, extension_boundary, cors_headers, MAX_REQUEST_BYTES
 
 ORIGIN = 'http://127.0.0.1:8766'
 MODEL = 'qwen2.5:0.5b'
@@ -117,6 +120,8 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
     desktop = WindowsIntegration(project, local_dir)
     captures = CaptureStore(local_dir)
     transcriber = LocalTranscriber(captures, local_dir)
+    web_notes = WebNotes(vault, local_dir)
+    web_bridge = WebBridge(project, secret_store)
     def source_task_is_current(task_id):
         return any(task['id'] == task_id or task_identity(task) == task_id for task in scan_vault(vault)['tasks'])
     worker = ReminderWorker(store, discord, desktop, task_is_current=source_task_is_current)
@@ -141,18 +146,26 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
         if request.headers.get('host') != '127.0.0.1:8766':
             return JSONResponse({'detail': 'Only the loopback host is allowed.'}, status_code=403)
         origin = request.headers.get('origin')
-        if origin and origin != ORIGIN:
+        extension_request = request.url.path.startswith('/extension/')
+        if extension_request:
+            rejection = extension_boundary(web_bridge, request)
+            if rejection is not None:
+                return rejection
+        elif origin and origin != ORIGIN:
             return JSONResponse({'detail': 'Foreign origins cannot access Bej.'}, status_code=403)
         if request.url.path.startswith('/api/'):
             if not secrets.compare_digest(request.headers.get('authorization', ''), f'Bearer {token}'):
                 return JSONResponse({'detail': 'Open Bej using Start-Bej.ps1 to authenticate this session.'}, status_code=401)
             try:
-                limit = CaptureStore.MAX_BYTES if request.url.path.startswith('/api/captures/upload/') else 65536
+                limit = (CaptureStore.MAX_BYTES if request.url.path.startswith('/api/captures/upload/')
+                         else MAX_REQUEST_BYTES if request.url.path.startswith('/api/web/') else 65536)
                 if int(request.headers.get('content-length', '0')) > limit:
                     return JSONResponse({'detail': 'Request is too large.'}, status_code=413)
             except ValueError:
                 return JSONResponse({'detail': 'Invalid request size.'}, status_code=400)
         response = await call_next(request)
+        if extension_request:
+            response.headers.update(cors_headers(origin))
         response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
@@ -545,6 +558,8 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
         if not page.is_file():
             raise HTTPException(503, 'Build the Bej UI first with npm run build:bej.')
         return FileResponse(page)
+
+    install_web_routes(app, web_notes, web_bridge)
 
     assets = project / 'dist-bej' / 'assets'
     if assets.is_dir():

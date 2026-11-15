@@ -15,6 +15,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
+from planner import generated_web_capture
 
 _TASK = re.compile(r'^(?P<prefix>[^\S\r\n]*[-*+][^\S\r\n]+\[)(?P<check> )(?P<middle>\][^\S\r\n]+)(?P<title>.*?)(?P<tail>[^\S\r\n]*)$')
 _BLOCKED = {'.git', '.obsidian', '.copilot', 'bej plans'}
@@ -46,6 +47,8 @@ class SourceEditor:
     def _source(self, source: str) -> Path:
         if not isinstance(source, str) or not source or '\\' in source or ':' in source or '\x00' in source:
             raise ValueError('Choose an ordinary Markdown source inside the vault.')
+        if generated_web_capture(source):
+            raise ValueError('Generated web captures are reference material, not source tasks.')
         parts = source.split('/')
         if (PureWindowsPath(source).is_absolute() or source.startswith('/')
                 or any(part in ('', '.', '..') or part.casefold() in _BLOCKED

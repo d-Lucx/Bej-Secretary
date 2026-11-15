@@ -16,6 +16,10 @@ CHECKBOX = re.compile(r'^\s*[-*+]\s+\[ \]\s+(.+)$')
 COMPLETED = re.compile(r'^\s*[-*+]\s+\[[xX]\]\s+(.+)$')
 
 
+def generated_web_capture(source):
+    return bool(re.fullmatch(r'bej captures/web/\d{4}-\d{2}-\d{2}-[a-f0-9]{32}\.md', source.casefold()))
+
+
 def task_identity(task: dict) -> str:
     """A source task remains the same when surrounding lines move.
 
@@ -54,6 +58,8 @@ def scan_vault(root: Path) -> dict:
                 warnings.append('Skipped a linked note outside the supported source scope.')
                 continue
             relative = path.relative_to(root).as_posix()
+            if generated_web_capture(relative):
+                continue
             try:
                 if path.stat().st_size > 2_000_000:
                     warnings.append(f'Skipped oversized note: {relative}')
