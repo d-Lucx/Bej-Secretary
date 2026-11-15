@@ -144,14 +144,26 @@ class OutlookAdapter:
 
     def _bind_account(self, app):
         accounts = app.get_accounts()
+        if self.state.get('accountId'):
+            accounts = [account for account in accounts
+                        if account.get('home_account_id') == self.state['accountId']]
         if len(accounts) != 1: raise ValueError('Connect exactly one personal Microsoft account.')
         identity = accounts[0].get('home_account_id')
         if not identity: raise ValueError('Microsoft account identity is unavailable.')
-        if self.state.get('accountId') != identity:
+        changed = self.state.get('accountId') != identity
+        if changed:
             self.state = {'clientId': self.state['clientId'], 'accountId': identity}
             self.previews.clear()
+        email = self._account_email(accounts[0])
+        if changed or self.state.get('accountEmail') != email:
+            self.state['accountEmail'] = email
             self._save()
         return accounts[0]
+
+    @staticmethod
+    def _account_email(account):
+        username = account.get('username')
+        return (username.strip() or None) if isinstance(username, str) else None
 
     def _token(self):
         try:
@@ -168,8 +180,20 @@ class OutlookAdapter:
 
     def status(self) -> dict:
         with self.lock:
+            # Status stays offline, including on a cold restart. Inspect only an
+            # already-loaded cache and never choose another saved account.
+            email = self.state.get('accountEmail') if self.state.get('accountId') else None
+            if self.app is not None and self.state.get('accountId'):
+                try:
+                    accounts = [account for account in self.app.get_accounts()
+                                if account.get('home_account_id') == self.state['accountId']]
+                    if len(accounts) == 1:
+                        email = self._account_email(accounts[0]) or email
+                except Exception:
+                    pass
             return {'configured': bool(self.state.get('clientId')), 'clientId': self.state.get('clientId', ''),
                     'connected': self.authenticated, 'authPending': self.pending, 'error': self.error,
+                    'accountEmail': email,
                     'calendarId': self.state.get('calendarId'), 'lastSyncedAt': self.state.get('lastSyncedAt')}
 
     def _request(self, method, path, *, body=None, etag=None):

@@ -8,10 +8,12 @@ import tempfile
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from planning_metadata import source_due, ranked_tasks, deadline_warnings
 
 MANILA = timezone(timedelta(hours=8), 'Asia/Manila')
 INTERNALS = {'.git', '.obsidian', '.copilot', 'bej plans'}
 CHECKBOX = re.compile(r'^\s*[-*+]\s+\[ \]\s+(.+)$')
+COMPLETED = re.compile(r'^\s*[-*+]\s+\[[xX]\]\s+(.+)$')
 
 
 def task_identity(task: dict) -> str:
@@ -38,7 +40,7 @@ def scan_vault(root: Path) -> dict:
     root = root.resolve(strict=True)
     if not root.is_dir():
         raise ValueError('The configured vault is not a folder.')
-    tasks, warnings = [], []
+    tasks, completed_tasks, warnings = [], [], []
     count = 0
     for parent, directories, files in os.walk(root, followlinks=False):
         directories[:] = sorted(d for d in directories if d.lower() not in INTERNALS
@@ -78,15 +80,18 @@ def scan_vault(root: Path) -> dict:
                     continue
                 if stripped.startswith('#'):
                     heading = stripped.lstrip('#').strip()
-                match = CHECKBOX.match(line)
+                unchecked = CHECKBOX.match(line)
+                match = unchecked or COMPLETED.match(line)
                 if not match:
                     continue
                 title = match.group(1).strip()
                 key = hashlib.sha256(f'{relative}\0{line_number}\0{title}'.encode()).hexdigest()[:24]
-                tasks.append({'id': key, 'title': title, 'source': relative, 'line': line_number,
+                destination = tasks if unchecked else completed_tasks
+                destination.append({'id': key, 'title': title, 'source': relative, 'line': line_number,
                               'heading': heading, 'fingerprint': fingerprint,
+                              **source_due(title),
                               'needsReview': bool(re.search(r'backlog|paused|template|example|milestone|goal|later|someday|roadmap', f'{relative} {heading}', re.I))})
-    return {'tasks': tasks, 'noteCount': count, 'warnings': warnings,
+    return {'tasks': tasks, 'completedTasks': completed_tasks, 'noteCount': count, 'warnings': warnings,
             'scannedAt': datetime.now(MANILA).isoformat()}
 
 
@@ -110,6 +115,7 @@ def make_plan(tasks: list[dict], day: str, capacity: int, now: datetime | None =
             raise ValueError('Assign work or personal to each selected task.')
         if type(task.get('minutes')) is not int or not 5 <= task['minutes'] <= 480:
             raise ValueError('Task estimates must be 5–480 whole minutes.')
+    tasks = ranked_tasks(tasks, selected_day.isoformat())
     weekday = selected_day.weekday() < 5 and not work_day_off
     earliest = now.hour * 60 + now.minute + (1 if now.second or now.microsecond else 0) if selected_day == now.date() else 0
     windows = {'work': [(480, 1020)] if weekday else [],
@@ -156,7 +162,8 @@ def make_plan(tasks: list[dict], day: str, capacity: int, now: datetime | None =
             unscheduled.append({**task, 'reason': reason})
     blocks.sort(key=lambda item: item['start'])
     return {'id': uuid.uuid4().hex, 'date': selected_day.isoformat(), 'timezone': 'Asia/Manila',
-            'capacity': capacity, 'scheduledMinutes': used, 'blocks': blocks, 'unscheduled': unscheduled}
+            'capacity': capacity, 'scheduledMinutes': used, 'blocks': blocks, 'unscheduled': unscheduled,
+            'deadlineWarnings': deadline_warnings(blocks, unscheduled, selected_day.isoformat())}
 
 
 def save_plan(root: Path, plan: dict) -> Path:
@@ -174,12 +181,18 @@ def save_plan(root: Path, plan: dict) -> Path:
         title = block['title'].replace('\n', ' ')
         content.append(f"- [ ] {block['start']}–{block['end']} · {title} ({block['category']}, {block['minutes']} min)")
         content.append(f"  - Source: [[{block['source']}]] · line {block['line']}")
+        content.append(f"  - Priority: {block.get('priority', 'normal')} · Due: {block.get('dueDate') or 'not specified'}")
     if not plan['blocks']:
         content.append('No tasks fit the selected availability and capacity.')
     if plan['unscheduled']:
         content.extend(['', '## Not scheduled', ''])
         for task in plan['unscheduled']:
             content.append(f"- {task['title']} — {task['reason']}")
+    if plan.get('deadlineWarnings'):
+        content.extend(['', '## Deadlines to review', ''])
+        for warning in plan['deadlineWarnings']:
+            task = next(item for item in [*plan['blocks'], *plan['unscheduled']] if item['id'] == warning['taskId'])
+            content.append(f"- {task['title']} · due {warning['dueDate']}: {warning['message']}")
     target = folder / f'{day}-{uuid.uuid4().hex[:10]}.md'
     # Publish only complete files. Windows rename refuses an existing destination.
     descriptor, temporary = tempfile.mkstemp(prefix='.bej-', suffix='.tmp', dir=folder)

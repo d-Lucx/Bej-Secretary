@@ -17,7 +17,7 @@ class Store:
 
 class App:
     def __init__(self, *args, **kwargs): self.token_cache = kwargs['token_cache']
-    def get_accounts(self): return [{'home_account_id': 'account-one'}]
+    def get_accounts(self): return [{'home_account_id': 'account-one', 'username': 'synthetic@gmail.com'}]
     def acquire_token_silent(self, scopes, account): return {'access_token': 'SECRET'}
     def initiate_device_flow(self, scopes):
         return {'user_code': 'CODE', 'verification_uri': 'https://microsoft.com/devicelogin', 'expires_in': 900, 'device_code': 'PRIVATE'}
@@ -108,6 +108,73 @@ class OutlookTests(unittest.TestCase):
         with self.assertRaises(ValueError): other.begin_login()
         with self.assertRaises(ValueError): other.configure('bad')
         self.assertEqual([], self.http.calls)
+
+    def test_cold_status_returns_saved_identity_without_auth_initialization(self):
+        self.adapter.state.update(accountId='account-one', accountEmail='synthetic@gmail.com')
+        self.adapter._save()
+        def forbidden(*args, **kwargs):
+            self.fail('Status must not initialize Microsoft authentication.')
+        restarted = OutlookAdapter(Path(self.tmp.name), self.store, http=self.http, app_factory=forbidden)
+        self.assertEqual('synthetic@gmail.com', restarted.status().get('accountEmail'))
+        self.assertFalse(restarted.status()['connected'])
+        self.assertEqual([], self.http.calls)
+
+    def test_deliberate_token_backfills_saved_identity_for_next_restart(self):
+        self.adapter.state['accountId'] = 'account-one'
+        self.adapter._save()
+        self.assertIsNone(self.adapter.status().get('accountEmail'))
+        self.adapter._token()
+        restarted = OutlookAdapter(Path(self.tmp.name), self.store, http=self.http, app_factory=App)
+        self.assertEqual('synthetic@gmail.com', restarted.status().get('accountEmail'))
+        self.assertFalse(restarted.status()['connected'])
+        self.assertEqual([], self.http.calls)
+
+    def test_loaded_status_reports_only_saved_account_username(self):
+        self.adapter.state['accountId'] = 'account-one'
+        app = self.adapter._application()
+        app.get_accounts = lambda: [
+            {'home_account_id': 'other', 'username': 'other@example.com'},
+            {'home_account_id': 'account-one', 'username': 'synthetic@gmail.com'},
+        ]
+        status = self.adapter.status()
+        self.assertEqual('synthetic@gmail.com', status.get('accountEmail'))
+        self.assertNotIn('other@example.com', json.dumps(status))
+        self.assertNotIn('account-one', json.dumps(status))
+        self.assertFalse(status['connected'])
+
+    def test_token_selects_saved_account_among_cached_accounts(self):
+        self.adapter.state['accountId'] = 'account-one'
+        app = self.adapter._application()
+        app.get_accounts = lambda: [
+            {'home_account_id': 'other', 'username': 'other@example.com'},
+            {'home_account_id': 'account-one', 'username': 'synthetic@gmail.com'},
+        ]
+        selected = []
+        app.acquire_token_silent = lambda scopes, account: selected.append(account) or {'access_token': 'SECRET'}
+        self.adapter._token()
+        self.assertEqual(['account-one'], [account['home_account_id'] for account in selected])
+        self.assertEqual('synthetic@gmail.com', self.adapter.status().get('accountEmail'))
+
+    def test_missing_saved_account_never_silently_switches_identity(self):
+        self.adapter.state.update(accountId='saved-account', accountEmail='saved@example.com', calendarId='saved-calendar')
+        with self.assertRaises(ValueError): self.adapter._token()
+        self.assertEqual('saved-account', self.adapter.state['accountId'])
+        self.assertEqual('saved@example.com', self.adapter.status().get('accountEmail'))
+        self.assertFalse(self.adapter.status()['connected'])
+
+    def test_reconfigure_clears_saved_sign_in_identity(self):
+        self.adapter._token()
+        self.assertEqual('synthetic@gmail.com', self.adapter.status().get('accountEmail'))
+        self.adapter.configure('22345678-1234-1234-1234-123456789abc')
+        self.assertIsNone(self.adapter.status().get('accountEmail'))
+        self.assertNotIn('accountId', self.adapter.state)
+
+    def test_account_without_username_still_persists_binding(self):
+        self.adapter._application().get_accounts = lambda: [{'home_account_id': 'account-one'}]
+        self.adapter._token()
+        restarted = OutlookAdapter(Path(self.tmp.name), self.store, http=self.http, app_factory=App)
+        self.assertEqual('account-one', restarted.state.get('accountId'))
+        self.assertIsNone(restarted.status().get('accountEmail'))
 
     def test_login_returns_only_safe_device_fields(self):
         result = self.adapter.begin_login()

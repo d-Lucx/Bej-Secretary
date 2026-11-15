@@ -2,7 +2,7 @@ export type BejStatus = {
   vaultPath: string; vaultName: string; vaultExists: boolean; today: string;
   ollama: { available: boolean; modelReady: boolean; model: string };
   discord: { destinationConfigured: boolean; tokenStored: boolean; deliveryVerified: boolean; enabled: boolean };
-  outlook: { configured: boolean; clientId?: string; connected: boolean; authPending: boolean; error?: string; calendarId?: string; lastSyncedAt?: string };
+  outlook: { configured: boolean; clientId?: string; connected: boolean; accountEmail?: string | null; authPending: boolean; error?: string; calendarId?: string; lastSyncedAt?: string };
   desktop?: { startupEnabled: boolean };
 };
 

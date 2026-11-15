@@ -16,10 +16,16 @@ This checkout starts from DomoNote. Bej now includes a dedicated local planner, 
 On this laptop, double-click **Start-Bej.cmd**, or run `./Start-Bej.ps1` from PowerShell. Keep its process running while using Bej. It opens an authenticated browser session at `http://127.0.0.1:8766`; opening that address in a new browser session without the launcher does not grant access. Reuse the open tab if Bej is already running. Use the tray icon to reopen an authenticated tab. Quit from the tray, close its console, or run `./Stop-Bej.ps1` to stop the local service. Windows sign-in startup is enabled on this laptop. The tray icon opens Bej, pauses reminders, and quits; recording never starts automatically.
 
 1. Choose **Read my vault**. Reading never changes source notes.
-2. Select candidates in **Source inbox**, choose work/personal, and adjust the visible duration estimates (30 minutes initially).
+2. Select candidates in **Source inbox**, choose work/personal, and adjust duration estimates (30 minutes initially), priority and optional due dates. These choices are remembered privately when you build a valid draft; source notes are not edited. Explicit task-line markers `📅 YYYY-MM-DD` and `due:: YYYY-MM-DD` supply due dates; invalid/conflicting markers stay unknown with a warning. Other dates in prose are not inferred as deadlines.
 3. Choose the date and task capacity (four hours initially, editable), then **Build daily draft**. Overflow remains unscheduled with a reason. Weekday personal tasks stay outside the 8 AM–5 PM work window; all dates use Manila time.
 4. Choose **Save plan to Obsidian** to create a new Markdown file in the vault's separate **Bej Plans** folder. Plans are never imported as new tasks. Repeating save for the same persistent draft does not create another file. Source notes remain untouched.
 5. Optionally choose **Explain with local AI**. `qwen2.5:0.5b` is installed and has passed a synthetic-plan smoke test. AI is not the scheduling authority.
+
+Allocation considers tasks due before the plan date first, then tasks due on that date, then later/undated tasks. Within each group, explicit priority wins, then earliest known deadline, then selection order. Work/personal windows, capacity and calendar conflicts still determine what fits. **Deadlines to review** flags overdue-by-plan-date tasks and due tasks that cannot fit; Bej does not silently move deadlines. A date-only deadline is not a known time of day.
+
+**Today** checks source-backed progress every 15 seconds while visible and offers **Review completion** on each open scheduled task. This preselects completion in the exact source-edit approval; preview and approval are still required. Checked source tasks appear complete; missing/renamed sources are unavailable, not assumed done. Refresh/rescan cancels obsolete queued reminders. Completed tasks are excluded from new local reflows, while their existing published Outlook blocks stay protected. Historical drafts and generated Markdown remain snapshots.
+
+Task choices and plan/calendar identity survive ordinary line shifts. Legacy published task IDs are resolved from proven source references and owned-event mappings before scheduling; conflicting duplicate mappings require review rather than another event. Renaming a task, changing its source note/heading or changing date text inside its title creates a new source identity and requires review.
 
 Local setup, including the vault path and Discord IDs, is in Git-ignored `.bej-local/config.json`. The **Connections** page can save a Discord token directly into Windows Credential Manager. Token entry does not send a message or enable delivery. The configured bot has passed an explicitly approved generic live delivery test. Do not paste credentials into chat, Obsidian, or Git.
 
@@ -39,7 +45,7 @@ Create `.bej-local/config.json` with a `vaultPath` pointing to the approved Obsi
 
 ## Outlook and reminders
 
-Outlook is signed in with the personal Microsoft account and the separate **Bej** calendar has been created/reused. Calendar reads and the saved sign-in were verified after restart. No personal task events have been published during setup.
+Outlook uses the personal Microsoft account and a separate **Bej** calendar. **Connections** shows the saved Microsoft sign-in address and links to Outlook Calendar. A Gmail address can be a Microsoft sign-in: adding that address as a Google account in Outlook shows Google calendars instead. Add/select the Microsoft account to see Bej. The saved identity is available offline; refresh the calendar to verify its current connection.
 
 - In **Connections**, refresh Outlook availability for the plan date, then rebuild the draft to avoid busy events.
 - In **Today**, choose **Review Outlook calendar changes** to see the task events Bej proposes creating/updating, then approve the displayed batch. Opening the preview does not publish anything. Bej only creates/updates its owned blocks; no invitations, deletions, or unrelated event edits. External changes are checked again before writes. Cyclic batch moves require separate approvals rather than unapproved temporary moves.

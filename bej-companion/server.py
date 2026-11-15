@@ -27,6 +27,9 @@ from windows_integration import WindowsIntegration
 from captures import CaptureStore
 from transcription import LocalTranscriber
 from reflow import reflow_plan
+from task_progress import plan_progress
+from planning_metadata import source_due
+from calendar_task_ids import resolve_calendar_ids
 
 ORIGIN = 'http://127.0.0.1:8766'
 MODEL = 'qwen2.5:0.5b'
@@ -41,6 +44,8 @@ class Selection(Input):
     fingerprint: str = Field(max_length=64)
     category: str = Field(pattern='^(work|personal)$')
     minutes: int = Field(strict=True, ge=5, le=480)
+    priority: str | None = Field(default=None, pattern='^(urgent|high|normal|low)$')
+    dueDate: str | None = Field(default=None, max_length=10)
 
 
 class PlanRequest(Input):
@@ -185,9 +190,16 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
 
     def read_tasks():
         try:
-            return scan_vault(vault)
+            snapshot = scan_vault(vault)
         except (FileNotFoundError, PermissionError, OSError):
             raise HTTPException(400, 'The configured vault is unavailable. Check its path and folder access.')
+        preferences = store.task_preferences()
+        snapshot['tasks'] = [{**task, 'category': 'work', 'minutes': 30, 'priority': 'normal',
+                              **preferences.get(task_identity(task), {}),
+                              'dueDateOrigin': 'local' if 'dueDate' in preferences.get(task_identity(task), {}) else 'source'}
+                             for task in snapshot['tasks']]
+        store.reconcile_source_tasks(snapshot['tasks'], snapshot['completedTasks'], complete_scan=not snapshot['warnings'])
+        return snapshot
 
     @app.get('/api/tasks')
     def tasks():
@@ -201,7 +213,11 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
             current = latest.get(selection.id)
             if not current or current['fingerprint'] != selection.fingerprint:
                 raise HTTPException(409, 'A source note changed. Rescan and review the task before planning.')
-            selected.append({**current, 'category': selection.category, 'minutes': selection.minutes})
+            selected.append({**current, 'category': selection.category, 'minutes': selection.minutes,
+                             'id': current.get('planTaskId', current['id']),
+                             'priority': selection.priority or current.get('priority', 'normal'),
+                             'dueDate': selection.dueDate if 'dueDate' in selection.model_fields_set else current.get('dueDate')})
+        selected = calendar_tasks(body.date, selected)
         calendar = outlook.planning_busy(body.date, [task['id'] for task in selected])
         extra_busy = store.setting(f'unavailable.{body.date}', [])
         result = make_plan(selected, body.date, body.capacity, busy=[*calendar['busy'], *extra_busy],
@@ -209,21 +225,44 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
         result['calendarStale'] = bool(outlook.status()['configured'] and calendar['stale'])
         result['calendarLastSyncedAt'] = calendar['lastSyncedAt']
         with io_lock:
-            store.put_plan(result)
+            preferences = {}
+            for task in selected:
+                choice = {key: task[key] for key in ('category', 'minutes', 'priority')}
+                choice['planTaskId'] = task['id']
+                if task.get('dueDate') != source_due(task['title'])['dueDate']:
+                    choice['dueDate'] = task.get('dueDate')
+                preferences[task_identity(task)] = choice
+            store.put_plan(result, preferences=preferences)
         return result
+
+    def calendar_tasks(day, tasks):
+        with outlook.lock:
+            return resolve_calendar_ids(tasks, day, store.task_id_aliases(day),
+                                        outlook.state.get('owned', {}), outlook.state.get('calendarId'))
 
     @app.post('/api/plan/reflow')
     def reflow(body: PlanChange):
         original = store.get_plan(body.planId)
         if not original:
             raise HTTPException(404, 'Draft not found.')
-        latest = {task['id']: task for task in read_tasks()['tasks']}
-        for task in original['blocks'] + original['unscheduled']:
-            if task['id'] not in latest or task.get('fingerprint') != latest[task['id']]['fingerprint']:
-                raise HTTPException(409, 'A source task changed. Rescan before rearranging this plan.')
-        calendar = outlook.planning_busy(original['date'], [task['id'] for task in original['blocks'] + original['unscheduled']])
+        snapshot = read_tasks()
+        latest = {task_identity(task): task for task in snapshot['tasks']}
+        completed = {task_identity(task) for task in snapshot['completedTasks']} - set(latest)
+        refreshed = {**original, 'blocks': [], 'unscheduled': []}
+        for section in ('blocks', 'unscheduled'):
+            for task in original[section]:
+                identity = task_identity(task)
+                if identity in completed:
+                    continue
+                current = latest.get(identity)
+                if not current:
+                    raise HTTPException(409, 'A source task is unavailable or changed. Rescan before rearranging this plan.')
+                refreshed[section].append({**task, **{key: current[key] for key in ('source', 'title', 'line', 'heading', 'fingerprint')}})
+        for section in ('blocks', 'unscheduled'):
+            refreshed[section] = calendar_tasks(original['date'], refreshed[section])
+        calendar = outlook.planning_busy(original['date'], [task['id'] for task in refreshed['blocks'] + refreshed['unscheduled']])
         old_windows = store.setting(f"unavailable.{original['date']}", [])
-        result = reflow_plan(original, body.start, body.end, body.reason,
+        result = reflow_plan(refreshed, body.start, body.end, body.reason,
                              busy=[*calendar['busy'], *old_windows],
                              work_day_off=store.setting(f"dayOff.{original['date']}", False))
         result['calendarStale'] = bool(outlook.status()['configured'] and calendar['stale'])
@@ -248,6 +287,13 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
             raise HTTPException(404, 'Draft not found.')
         return {**result, 'savedPath': store.saved_path(plan_id)}
 
+    @app.get('/api/plans/{plan_id}/progress')
+    def progress(plan_id: str):
+        result = store.get_plan(plan_id)
+        if not result:
+            raise HTTPException(404, 'Draft not found.')
+        return plan_progress(result, read_tasks())
+
     @app.post('/api/plans/save')
     def save(body: PlanID):
         with io_lock:
@@ -257,9 +303,9 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
             result = store.get_plan(body.planId)
             if not result:
                 raise HTTPException(404, 'Draft not found in this session. Generate it again.')
-            latest = {task['id']: task for task in read_tasks()['tasks']}
+            latest = {task_identity(task): task for task in read_tasks()['tasks']}
             for task in result['blocks'] + result['unscheduled']:
-                current = latest.get(task['id'])
+                current = latest.get(task_identity(task))
                 if not current or current['fingerprint'] != task['fingerprint']:
                     raise HTTPException(409, 'A source note changed after this draft. Rescan before saving.')
             try:
@@ -279,7 +325,8 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
             raise HTTPException(409, 'The local model is already working. Try again after it finishes.')
         try:
             # Only the explicitly selected draft goes to the fixed local endpoint.
-            summary = [{'title': b['title'], 'start': b['start'], 'end': b['end']} for b in result['blocks']]
+            summary = [{'title': b['title'], 'start': b['start'], 'end': b['end'],
+                        'priority': b.get('priority', 'normal'), 'dueDate': b.get('dueDate')} for b in result['blocks']]
             response = local_http.post('http://127.0.0.1:11434/api/chat', timeout=120, allow_redirects=False, json={
                 'model': MODEL, 'stream': False, 'keep_alive': 0,
                 'options': {'num_ctx': 2048, 'num_predict': 220, 'temperature': 0.2},
@@ -322,9 +369,10 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
         result = store.get_plan(body.planId)
         if not result:
             raise HTTPException(404, 'Draft not found.')
-        latest = {task['id']: task for task in read_tasks()['tasks']}
+        latest = {task_identity(task): task for task in read_tasks()['tasks']}
         for block in result['blocks']:
-            if block['id'] not in latest or block.get('fingerprint') != latest[block['id']]['fingerprint']:
+            current = latest.get(task_identity(block))
+            if not current or block.get('fingerprint') != current['fingerprint']:
                 raise HTTPException(409, 'A source task changed or is no longer unchecked. Rescan and rebuild before enabling reminders.')
         if body.channel == 'discord':
             discord.validate()
@@ -374,11 +422,24 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
         result = store.get_plan(body.planId)
         if not result:
             raise HTTPException(404, 'Draft not found.')
+        require_open_plan(result)
         return outlook.preview(result)
+
+    def require_open_plan(result):
+        current = {task_identity(task) for task in read_tasks()['tasks']}
+        if any(task_identity(task) not in current for task in result['blocks']):
+            raise HTTPException(409, 'Some draft tasks are complete or their source is unavailable or changed. Build a new draft from open tasks before reviewing Outlook changes.')
 
     @app.post('/api/outlook/publish')
     def outlook_publish(body: Approval):
-        result = outlook.publish(body.previewId)
+        with outlook.lock:
+            preview = outlook.previews.get(body.previewId)
+            if preview:
+                plan = store.get_plan(preview['planId'])
+                if not plan:
+                    raise HTTPException(409, 'The approved draft is unavailable. Review a new preview.')
+                require_open_plan(plan)
+            result = outlook.publish(body.previewId)
         store.audit('outlook.publish', {'previewId': body.previewId, 'success': result.get('success')})
         return result
 
@@ -409,6 +470,10 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
             raise ValueError('Preview an exact task edit first.')
         result = editor.apply(body.previewId)
         store.audit('source.edit', {'source': result['source'], 'line': result['line']})
+        try:
+            read_tasks()  # Reconcile alerts immediately after an approved completion.
+        except HTTPException:
+            result['reminderReviewNeeded'] = True
         return result
 
     @app.post('/api/desktop/startup')

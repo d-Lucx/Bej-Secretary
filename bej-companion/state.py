@@ -23,8 +23,25 @@ class LocalStore:
                     due REAL NOT NULL, data TEXT NOT NULL, state TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
                     next_attempt REAL NOT NULL, last_error TEXT, message_id TEXT);
                 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, at TEXT, action TEXT, detail TEXT);
+                CREATE TABLE IF NOT EXISTS task_preferences(identity TEXT PRIMARY KEY, data TEXT NOT NULL);
             ''')
         self._upgrade_task_keys(directory)
+        self._seed_task_ids()
+
+    def _seed_task_ids(self):
+        """Preserve legacy plan/calendar identities when source line numbers move."""
+        if self.setting('tasks.stableIdsVersion') == 1:
+            return
+        with self.connect() as db:
+            for row in db.execute('SELECT data FROM plans ORDER BY rowid').fetchall():
+                for task in json.loads(row['data']).get('blocks', []):
+                    identity = task_identity(task)
+                    existing = db.execute('SELECT data FROM task_preferences WHERE identity=?', (identity,)).fetchone()
+                    preference = json.loads(existing['data']) if existing else {}
+                    if not preference.get('planTaskId'):
+                        preference['planTaskId'] = task['id']
+                        db.execute('INSERT INTO task_preferences VALUES(?,?) ON CONFLICT(identity) DO UPDATE SET data=excluded.data', (identity, json.dumps(preference)))
+        self.set_setting('tasks.stableIdsVersion', 1)
 
     def _upgrade_task_keys(self, directory):
         if self.setting('reminders.taskKeysVersion') == 1:
@@ -76,9 +93,36 @@ class LocalStore:
         with self.connect() as db:
             db.execute('INSERT INTO audit(at,action,detail) VALUES(?,?,?)', (datetime.now(MANILA).isoformat(), action, json.dumps(detail)))
 
-    def put_plan(self, plan):
+    def put_plan(self, plan, *, preferences=None):
         with self.connect() as db:
             db.execute('INSERT INTO plans(id,data) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', (plan['id'], json.dumps(plan)))
+            for identity, preference in (preferences or {}).items():
+                db.execute('INSERT INTO task_preferences VALUES(?,?) ON CONFLICT(identity) DO UPDATE SET data=excluded.data',
+                           (identity, json.dumps(preference)))
+
+    def task_preferences(self):
+        with self.connect() as db:
+            return {r['identity']: json.loads(r['data']) for r in db.execute('SELECT * FROM task_preferences')}
+
+    def task_id_aliases(self, day):
+        aliases = {}
+        with self.connect() as db:
+            for row in db.execute("SELECT data FROM plans WHERE json_extract(data,'$.date')=?", (day,)):
+                plan = json.loads(row['data'])
+                for task in [*plan.get('blocks', []), *plan.get('unscheduled', [])]:
+                    aliases.setdefault(task_identity(task), set()).add(task['id'])
+        return aliases
+
+    def reconcile_source_tasks(self, tasks, completed, *, complete_scan=True):
+        active = {key for task in tasks for key in (task['id'], task_identity(task))}
+        done = {key for task in completed for key in (task['id'], task_identity(task))} - active
+        with self.connect() as db:
+            for row in db.execute("SELECT id,data FROM reminders WHERE state='pending'").fetchall():
+                payload = json.loads(row['data'])
+                key = payload.get('sourceIdentity', payload['taskId'])
+                if key not in active and (complete_scan or key in done):
+                    reason = 'Source checkbox is complete.' if key in done else 'Source task is unavailable or changed. Review its source; completion has not been assumed.'
+                    db.execute("UPDATE reminders SET state='canceled',last_error=? WHERE id=? AND state='pending'", (reason, row['id']))
 
     def get_plan(self, plan_id):
         with self.connect() as db:

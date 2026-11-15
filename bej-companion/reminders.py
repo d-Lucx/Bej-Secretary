@@ -3,7 +3,7 @@ import threading
 from datetime import datetime
 
 from discord_adapter import DiscordError
-from planner import MANILA
+from planner import MANILA, task_identity
 
 
 def carry_forward_reminders(store, previous_plan_id, plan):
@@ -12,10 +12,10 @@ def carry_forward_reminders(store, previous_plan_id, plan):
                if item['data'].get('planId') == previous_plan_id and item['state'] == 'pending']
     choices = {}
     for item in pending:
-        choices.setdefault(item['channel'], set()).add(item['data']['taskId'])
+        choices.setdefault(item['channel'], set()).add(item['data'].get('sourceIdentity', item['data']['taskId']))
         store.cancel(item['id'])
     for channel, task_ids in choices.items():
-        selected = {**plan, 'blocks': [block for block in plan['blocks'] if block['id'] in task_ids]}
+        selected = {**plan, 'blocks': [block for block in plan['blocks'] if task_identity(block) in task_ids]}
         store.arm(selected, channel)
 
 
