@@ -56,6 +56,8 @@ Outlook is signed in with the personal Microsoft account and the separate **Bej*
 
 **Manual capture** offers explicit microphone recording or selected-screen video. Capture never starts at sign-in or on an app/calendar event. Stop/pause controls remain visible, sessions are capped at five minutes/45 MiB in the browser, and uploads at 50 MiB. Review before saving. Saved recordings can be played/downloaded and explicitly deleted with their transcript. Retention is **until explicit deletion**, with no automatic purge.
 
+An elapsed **MM:SS** counter shows active recording time for microphone and screen capture. It freezes during pause and after stop, stays beside the unsaved preview, and resets for a new recording. The five-minute session limit still includes paused time.
+
 Microphone recordings can be transcribed using the installed local tiny Whisper model. The local speech test recognized a synthetic sentence in approximately 3.9 seconds, without microphone access or cloud transcription. Screen recording currently has no audio; transcription is offered for microphone recordings. Pin `av==16.0.1`: the latest PyAV release removed an argument Faster-Whisper 1.2.1 requires.
 
 ## Current limits and verification
