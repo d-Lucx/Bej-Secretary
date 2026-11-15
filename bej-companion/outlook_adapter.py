@@ -373,7 +373,10 @@ class OutlookAdapter:
                 try:
                     identity, title = block['id'], block['title']
                     if not isinstance(identity, str) or not identity or identity in ids: raise ValueError()
-                    if not isinstance(title, str) or not title.strip() or len(title) > 255: raise ValueError()
+                    if not isinstance(title, str) or not title.strip(): raise ValueError()
+                    title_shortened = len(title) > 255
+                    if title_shortened:
+                        title = title[:254].rstrip() + '…'
                     if not all(re.fullmatch(r'\d{2}:\d{2}', block[k]) for k in ('start', 'end')): raise ValueError()
                     start = datetime.fromisoformat(day + 'T' + block['start']).replace(tzinfo=MANILA)
                     end = datetime.fromisoformat(day + 'T' + block['end']).replace(tzinfo=MANILA)
@@ -396,6 +399,9 @@ class OutlookAdapter:
                         raise ValueError('An earlier task creation is unconfirmed. Retry its original contents before changing this task.')
                     operation['snapshot'] = snapshot
                     operation['transactionId'] = owned.get('transactionId') if owned else str(uuid.uuid4())
+                # Presentation metadata must not enter the recoverable event snapshot.
+                if title_shortened:
+                    operation['titleShortened'] = True
                 operations.append(operation)
             operations, _ = self._check_availability(operations, self.cached_busy(day)['busy'])
             preview_id = uuid.uuid4().hex

@@ -63,6 +63,45 @@ class OutlookTests(unittest.TestCase):
     def plan(self, title='Task'):
         return {'id': 'plan', 'date': '2026-11-16', 'blocks': [{'id': 'task', 'title': title, 'start': '08:00', 'end': '08:30'}]}
 
+    def test_long_source_title_has_explicit_short_calendar_title_and_requires_approval(self):
+        self.sync_empty()
+        source = 'Review ' + 'detailed task description ' * 13
+        plan = self.plan(source)
+        before = len(self.http.calls)
+        preview = self.adapter.preview(plan)
+        operation = preview['operations'][0]
+        self.assertLessEqual(len(operation['title']), 255)
+        self.assertTrue(operation['title'].endswith('…'))
+        self.assertTrue(operation['titleShortened'])
+        self.assertEqual(plan['blocks'][0]['title'], source)
+        self.assertEqual(len(self.http.calls), before)  # Preview does not create events.
+        self.http.responses += [Response({'id': 'event', '@odata.etag': 'v1'})]
+        result = self.publish(preview['previewId'])
+        self.assertTrue(result['success'], result)
+        body = next(kwargs['json'] for method, _, kwargs in self.http.calls if method == 'POST')
+        self.assertEqual(body['subject'], operation['title'])
+        self.assertNotIn('titleShortened', body)
+
+    def test_calendar_title_at_limit_is_unchanged(self):
+        self.sync_empty()
+        source = 'x' * 255
+        operation = self.adapter.preview(self.plan(source))['operations'][0]
+        self.assertEqual(operation['title'], source)
+        self.assertFalse(operation.get('titleShortened', False))
+
+    def test_short_title_metadata_does_not_break_uncertain_creation_recovery(self):
+        self.sync_empty()
+        preview = self.adapter.preview(self.plan('Long source task ' * 20))
+        self.assertFalse(self.publish(preview['previewId'])['success'])
+        operation = preview['operations'][0]
+        remote = self.event('committed')
+        remote.update(transactionId=operation['transactionId'], subject=operation['title'],
+                      attendees=[], **{'@odata.etag': 'v1'})
+        posts = sum(method == 'POST' for method, _, _ in self.http.calls)
+        result = self.publish(preview['previewId'], busy_bej=[remote])
+        self.assertTrue(result['success'], result)
+        self.assertEqual(posts, sum(method == 'POST' for method, _, _ in self.http.calls))
+
     def test_not_configured_and_invalid_client_never_call_network(self):
         other = OutlookAdapter(Path(self.tmp.name) / 'other', self.store, http=self.http, app_factory=App)
         self.assertFalse(other.status()['configured'])

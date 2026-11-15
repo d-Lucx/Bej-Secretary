@@ -49,3 +49,10 @@ The account-side gates are resolved. Future enhancements remain documented in RE
 - Completion is the checked source checkbox, through Obsidian or an exact approved source edit. Inbox selection, a reminder receipt, elapsed time, Discord replies and calendar blocks are not completion signals. Source validation runs immediately before delivery; removed/changed sources cancel obsolete alerts without asserting completion.
 - Independent review caught delivery still relying on line IDs; payload migration and delivery validation now share the canonical source identity. Regression covers unchanged task after line insertion and suppression after checking it off.
 - Verification: 143 Python tests run (140 passed, 3 Windows link-permission skips), 102 JS tests passed, TypeScript/production build passed. Synthetic browser interaction checks passed for saved switch state, on/off, remount restoration, and preview without publishing. Desktop and narrow layouts inspected with the Design Taste screenshot script. No live calendar publication or test message was used for these checks.
+
+## Outlook long-title preview correction — November 15, 2026
+
+- A valid local task with a 310-character title was rejected by the adapter's 255-character calendar-title guard. Preview now shortens only the proposed calendar title with an ellipsis and labels the change explicitly; full local tasks and source notes remain unchanged. Approval publishes exactly the displayed title.
+- Presentation metadata stays outside the creation-recovery snapshot so an uncertain creation can still be reconciled without a duplicate POST.
+- Added regressions for a long title, the 255-character boundary, explicit approval using the displayed title, unchanged source data, and uncertain-creation recovery. Full Python suite: 146 run, 143 passed, 3 Windows link-permission skips. TypeScript/production build passed.
+- Live read-only verification: November 16 availability refreshed successfully with zero busy periods; the existing eight-block draft preview returned success, with one shortened calendar title. No calendar events were published.
