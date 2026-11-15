@@ -50,6 +50,61 @@ class StateTests(unittest.TestCase):
         states = sorted(r['state'] for r in self.store.reminders())
         self.assertEqual(states, ['canceled', 'pending'])
 
+    def test_disabling_plan_preserves_other_plans_channels_and_history(self):
+        now = datetime(2026, 11, 16, 7, 0, tzinfo=MANILA)
+        self.store.arm(draft(), 'desktop', now)
+        self.store.arm(draft(), 'discord', now)
+        other = draft()
+        other['id'] = 'plan2'
+        other['blocks'][0]['id'] = 'task2'
+        self.store.arm(other, 'discord', now)
+        self.store.disarm('plan1', 'discord')
+        pending = [r for r in self.store.reminders() if r['state'] == 'pending']
+        self.assertEqual(sorted((r['data']['planId'], r['channel']) for r in pending),
+                         [('plan1', 'desktop'), ('plan2', 'discord')])
+        self.assertEqual(len(self.store.reminders()), 3)
+
+    def test_rescheduling_after_delivery_or_uncertain_send_never_sends_twice(self):
+        now = datetime(2026, 11, 16, 7, 0, tzinfo=MANILA)
+        for channel, state in [('discord', 'sent'), ('desktop', 'uncertain')]:
+            key = self.store.arm(draft(), channel, now)[0]
+            self.store.finish(key, state)
+            self.assertEqual(self.store.arm(draft(start='09:00'), channel, now), [])
+        self.assertEqual(len(self.store.reminders()), 2)
+
+    def test_line_shift_keeps_only_one_pending_reminder_per_source_task(self):
+        now = datetime(2026, 11, 16, 7, 0, tzinfo=MANILA)
+        original = draft()
+        original['blocks'][0].update(source='Work.md', heading='Today', line=2)
+        self.store.put_plan(original)
+        self.store.arm(original, 'desktop', now)
+        moved = draft(start='09:00')
+        moved['id'] = 'plan2'
+        moved['blocks'][0].update(id='shifted-line-id', source='Work.md', heading='Today', line=3)
+        self.store.put_plan(moved)
+        self.store.arm(moved, 'desktop', now)
+        pending = [r for r in self.store.reminders() if r['state'] == 'pending']
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]['data']['planId'], 'plan2')
+
+    def test_legacy_keys_upgrade_with_backup_and_protect_delivered_history(self):
+        import json
+        now = datetime(2026, 11, 16, 7, 0, tzinfo=MANILA)
+        original = draft()
+        original['blocks'][0].update(source='Work.md', heading='Today')
+        self.store.put_plan(original)
+        key = self.store.arm(original, 'desktop', now)[0]
+        self.store.finish(key, 'sent')
+        with self.store.connect() as db:
+            db.execute("UPDATE reminders SET task_key='2026-11-16:task1:desktop'")
+            db.execute("DELETE FROM settings WHERE key='reminders.taskKeysVersion'")
+        again = LocalStore(self.path)
+        self.assertTrue((self.path / 'reminders-before-task-keys.sqlite3').exists())
+        shifted = json.loads(json.dumps(original))
+        shifted['blocks'][0].update(id='shifted', start='09:00')
+        self.assertEqual(again.arm(shifted, 'desktop', now), [])
+        self.assertEqual(again.reminders()[0]['state'], 'sent')
+
     def test_returning_to_original_time_reactivates_only_the_canceled_record(self):
         now = datetime(2026, 11, 16, 7, 0, tzinfo=MANILA)
         self.store.arm(draft(), 'discord', now)

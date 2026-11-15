@@ -9,6 +9,25 @@ from planner import MANILA
 
 
 class ServiceTests(unittest.TestCase):
+    def test_plan_reminder_switch_off_and_completed_source_guard(self):
+        from state import LocalStore
+        store = LocalStore(self.root / '.bej-local')
+        task = self.client.get('/api/tasks', headers=self.headers).json()['tasks'][0]
+        day = (datetime.now(MANILA) + timedelta(days=1)).date().isoformat()
+        plan = {'id': 'switch-plan', 'date': day, 'blocks': [{**task, 'category': 'personal', 'start': '08:00', 'end': '08:30'}]}
+        store.put_plan(plan)
+        store.arm(plan, 'desktop')
+        response = self.client.get('/api/plans/switch-plan/reminders', headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['desktop']['pending'], 1)
+        response = self.client.post('/api/reminders/disarm', json={'planId': plan['id'], 'channel': 'desktop'}, headers=self.headers)
+        self.assertEqual(response.json()['canceled'], 1)
+        self.assertEqual(self.client.get('/api/plans/switch-plan/reminders', headers=self.headers).json()['desktop']['pending'], 0)
+        (self.vault / 'Notes.md').write_text('# Work\n- [x] Build Bej\n', encoding='utf-8')
+        response = self.client.post('/api/reminders/arm', json={'planId': plan['id'], 'channel': 'desktop'}, headers=self.headers)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertTrue(all(r['state'] != 'pending' for r in store.reminders()))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)

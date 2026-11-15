@@ -4,11 +4,11 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from planner import MANILA
+from planner import MANILA, task_identity
 
 
 class LocalStore:
@@ -24,6 +24,34 @@ class LocalStore:
                     next_attempt REAL NOT NULL, last_error TEXT, message_id TEXT);
                 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, at TEXT, action TEXT, detail TEXT);
             ''')
+        self._upgrade_task_keys(directory)
+
+    def _upgrade_task_keys(self, directory):
+        if self.setting('reminders.taskKeysVersion') == 1:
+            return
+        # Preserve a recoverable SQLite snapshot before changing legacy keys.
+        with self.connect() as db:
+            rows = db.execute('SELECT id,data FROM reminders').fetchall()
+            plans = {r['id']: json.loads(r['data']) for r in db.execute('SELECT id,data FROM plans')}
+            if rows:
+                backup_path = directory / 'reminders-before-task-keys.sqlite3'
+                if not backup_path.exists():
+                    with closing(sqlite3.connect(backup_path)) as backup:
+                        db.backup(backup)
+            for row in rows:
+                payload = json.loads(row['data'])
+                plan = plans.get(payload['planId'], {})
+                block = next((b for b in plan.get('blocks', []) if b['id'] == payload['taskId']), None)
+                if block:
+                    identity = task_identity(block)
+                    payload['sourceIdentity'] = identity
+                    db.execute('UPDATE reminders SET task_key=?,data=? WHERE id=?',
+                               (f"{payload['date']}:{identity}:" + db.execute('SELECT channel FROM reminders WHERE id=?', (row['id'],)).fetchone()['channel'], json.dumps(payload), row['id']))
+            # Keep the latest queued revision; history is retained for review.
+            db.execute("""UPDATE reminders SET state='canceled' WHERE state='pending' AND
+                (rowid NOT IN (SELECT MAX(rowid) FROM reminders WHERE state='pending' GROUP BY task_key)
+                 OR task_key IN (SELECT task_key FROM reminders WHERE state IN ('sending','sent','uncertain')))""")
+        self.set_setting('reminders.taskKeysVersion', 1)
 
     @contextmanager
     def connect(self):
@@ -77,12 +105,16 @@ class LocalStore:
         now = now or datetime.now(MANILA)
         result = []
         with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
             for block in plan['blocks']:
                 due = datetime.fromisoformat(f"{plan['date']}T{block['start']}:00+08:00")
-                task_key = f"{plan['date']}:{block['id']}:{channel}"
+                task_key = f"{plan['date']}:{task_identity(block)}:{channel}"
+                if db.execute("SELECT 1 FROM reminders WHERE task_key=? AND state IN ('sending','sent','uncertain')", (task_key,)).fetchone():
+                    continue
                 key = hashlib.sha256(f"{task_key}:{block['start']}".encode()).hexdigest()[:24]
                 db.execute("UPDATE reminders SET state='canceled' WHERE task_key=? AND id<>? AND state='pending'", (task_key, key))
                 payload = {'planId': plan['id'], 'taskId': block['id'], 'title': block['title'],
+                           'sourceIdentity': task_identity(block),
                            'date': plan['date'], 'start': block['start'], 'end': block['end'], 'category': block['category']}
                 state = 'pending' if due >= now else 'missed'
                 db.execute('INSERT OR IGNORE INTO reminders(id,task_key,channel,due,data,state,next_attempt) VALUES(?,?,?,?,?,?,?)',
@@ -92,6 +124,17 @@ class LocalStore:
                 result.append(key)
         self.audit('reminders.armed', {'planId': plan['id'], 'channel': channel, 'count': len(result)})
         return result
+
+    def disarm(self, plan_id, channel):
+        if channel not in ('discord', 'desktop'):
+            raise ValueError('Unknown reminder destination.')
+        with self.connect() as db:
+            cursor = db.execute("UPDATE reminders SET state='canceled' WHERE channel=? AND state='pending' AND json_extract(data,'$.planId')=?", (channel, plan_id))
+            return cursor.rowcount
+
+    def plan_reminder_counts(self, plan_id):
+        with self.connect() as db:
+            return {r['channel']: r['count'] for r in db.execute("SELECT channel,COUNT(*) AS count FROM reminders WHERE state='pending' AND json_extract(data,'$.planId')=? GROUP BY channel", (plan_id,))}
 
     def reminders(self):
         with self.connect() as db:

@@ -14,6 +14,18 @@ INTERNALS = {'.git', '.obsidian', '.copilot', 'bej plans'}
 CHECKBOX = re.compile(r'^\s*[-*+]\s+\[ \]\s+(.+)$')
 
 
+def task_identity(task: dict) -> str:
+    """A source task remains the same when surrounding lines move.
+
+    Scope exact text to its note and heading: identical titles in different
+    projects are not enough evidence to merge tasks.
+    """
+    if not task.get('source'):
+        return task['id']
+    title = ' '.join(task['title'].split()).casefold()
+    return hashlib.sha256(f"{task['source']}\0{task.get('heading', '')}\0{title}".encode()).hexdigest()[:24]
+
+
 def contained(path: Path, root: Path) -> bool:
     return path.resolve().is_relative_to(root.resolve())
 
@@ -85,11 +97,15 @@ def make_plan(tasks: list[dict], day: str, capacity: int, now: datetime | None =
         raise ValueError('Choose today or a future date.')
     if type(capacity) is not int or not 15 <= capacity <= 960:
         raise ValueError('Daily task capacity must be 15–960 minutes.')
-    ids = set()
+    ids, identities = set(), set()
     for task in tasks:
         if not task.get('id') or task['id'] in ids:
             raise ValueError('Select each task only once.')
         ids.add(task['id'])
+        identity = task_identity(task)
+        if identity in identities:
+            raise ValueError('Select the same source task only once, even when repeated on another line.')
+        identities.add(identity)
         if task.get('category') not in ('work', 'personal'):
             raise ValueError('Assign work or personal to each selected task.')
         if type(task.get('minutes')) is not int or not 5 <= task['minutes'] <= 480:

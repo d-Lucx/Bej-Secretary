@@ -39,3 +39,13 @@ User explicitly authorized automatic pushes and ordered Outlook sync and Discord
 - Credentials, Microsoft cache, client/server/channel identifiers, captures, transcripts, backups, SQLite, installed models, screenshots, and generated builds remain outside Git. Original source notices preserved.
 
 The account-side gates are resolved. Future enhancements remain documented in README/FUTURE_IMPROVEMENTS.md; the checkpoint does not claim that every advanced roadmap feature is implemented.
+
+## Reminder controls and duplicate diagnosis — November 15, 2026
+
+- Local inspection found pending alerts paired with canceled reschedule history, with no duplicate pending task/destination pairs and no exact duplicate source titles. Active alerts and history now have separate views.
+- Per-plan Discord/desktop switches load persisted pending counts and cancel only that plan/destination when switched off. Global delivery pauses remain separate; already in-flight delivery cannot be recalled.
+- Reminder identity now uses source note, heading and normalized exact title rather than source line. A private SQLite snapshot precedes legacy-key migration; superseded pending duplicates are canceled with history preserved. Identical titles in different notes/headings remain separate tasks.
+- Sent, sending and uncertain deliveries block rearming the same source task/day/destination after rescheduling. Duplicate selections of the same source task are rejected, and enabling stale/completed drafts requires a rescan/rebuild.
+- Completion is the checked source checkbox, through Obsidian or an exact approved source edit. Inbox selection, a reminder receipt, elapsed time, Discord replies and calendar blocks are not completion signals. Source validation runs immediately before delivery; removed/changed sources cancel obsolete alerts without asserting completion.
+- Independent review caught delivery still relying on line IDs; payload migration and delivery validation now share the canonical source identity. Regression covers unchanged task after line insertion and suppression after checking it off.
+- Verification: 143 Python tests run (140 passed, 3 Windows link-permission skips), 102 JS tests passed, TypeScript/production build passed. Synthetic browser interaction checks passed for saved switch state, on/off, remount restoration, and preview without publishing. Desktop and narrow layouts inspected with the Design Taste screenshot script. No live calendar publication or test message was used for these checks.

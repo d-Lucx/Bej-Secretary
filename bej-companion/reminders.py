@@ -39,7 +39,7 @@ class ReminderWorker:
         data = item['data']
         if self.task_is_current:
             try:
-                if not self.task_is_current(data['taskId']):
+                if not self.task_is_current(data.get('sourceIdentity', data['taskId'])):
                     self.store.finish(item['id'], 'canceled', error='The source task was completed, removed, or changed. Rescan before arming it again.')
                     return
             except Exception:

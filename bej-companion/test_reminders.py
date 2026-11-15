@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from discord_adapter import DiscordError
-from planner import MANILA
+from planner import MANILA, scan_vault, task_identity
 from reminders import ReminderWorker, carry_forward_reminders
 from state import LocalStore
 
@@ -40,6 +40,30 @@ class ReminderTests(unittest.TestCase):
         self.assertEqual(len(adapter.sent), 1)
         self.assertEqual(self.store.reminders()[0]['state'], 'sent')
         self.assertEqual(self.store.reminders()[0]['message_id'], '123')
+
+    def test_line_shift_still_delivers_but_checked_source_does_not(self):
+        self.store.disarm('p', 'discord')
+        vault = Path(self.tmp.name) / 'vault'
+        vault.mkdir()
+        note = vault / 'Work.md'
+        note.write_text('# Work\n- [ ] Review outline\n', encoding='utf-8')
+        source = scan_vault(vault)['tasks'][0]
+        plan = {'id': 'source-plan', 'date': '2026-11-16', 'blocks': [
+            {**source, 'start': '08:00', 'end': '08:30', 'category': 'work'}]}
+        self.store.arm(plan, 'discord', self.now - timedelta(minutes=5))
+        note.write_text('\n# Work\n- [ ] Review outline\n', encoding='utf-8')
+        adapter = FakeDiscord()
+        valid = lambda key: any(task_identity(t) == key for t in scan_vault(vault)['tasks'])
+        worker = ReminderWorker(self.store, adapter, task_is_current=valid)
+        worker.tick(self.now)
+        self.assertEqual(len(adapter.sent), 1)
+        self.store.arm(plan, 'desktop', self.now - timedelta(minutes=5))
+        self.store.set_setting('desktop.enabled', True)
+        note.write_text('\n# Work\n- [x] Review outline\n', encoding='utf-8')
+        worker.tick(self.now)
+        desktop = next(r for r in self.store.reminders() if r['channel'] == 'desktop')
+        self.assertEqual(desktop['state'], 'canceled')
+        self.assertEqual(len(adapter.sent), 1)
 
     def test_uncertain_send_is_not_blindly_retried(self):
         adapter = FakeDiscord(DiscordError('Timed out', uncertain=True))

@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from planner import MANILA, make_plan, save_plan, scan_vault
+from planner import MANILA, make_plan, save_plan, scan_vault, task_identity
 from credentials import WindowsSecrets
 from discord_adapter import DiscordAdapter, DiscordError
 from outlook_adapter import OutlookAdapter
@@ -113,7 +113,7 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
     captures = CaptureStore(local_dir)
     transcriber = LocalTranscriber(captures, local_dir)
     def source_task_is_current(task_id):
-        return any(task['id'] == task_id for task in scan_vault(vault)['tasks'])
+        return any(task['id'] == task_id or task_identity(task) == task_id for task in scan_vault(vault)['tasks'])
     worker = ReminderWorker(store, discord, desktop, task_is_current=source_task_is_current)
     editor = None
 
@@ -322,6 +322,10 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
         result = store.get_plan(body.planId)
         if not result:
             raise HTTPException(404, 'Draft not found.')
+        latest = {task['id']: task for task in read_tasks()['tasks']}
+        for block in result['blocks']:
+            if block['id'] not in latest or block.get('fingerprint') != latest[block['id']]['fingerprint']:
+                raise HTTPException(409, 'A source task changed or is no longer unchecked. Rescan and rebuild before enabling reminders.')
         if body.channel == 'discord':
             discord.validate()
         elif not worker.desktop:
@@ -329,6 +333,19 @@ def create_app(project: Path, token: str, vault: Path | None = None, *, credenti
         ids = store.arm(result, body.channel)
         store.set_setting(f'{body.channel}.enabled', True)
         return {'armed': len(ids), 'channel': body.channel, 'quietHours': '22:00–06:00 Asia/Manila'}
+
+    @app.get('/api/plans/{plan_id}/reminders')
+    def plan_reminders(plan_id: str):
+        if not store.get_plan(plan_id):
+            raise HTTPException(404, 'Draft not found.')
+        counts = store.plan_reminder_counts(plan_id)
+        return {channel: {'pending': counts.get(channel, 0),
+                          'paused': not store.setting(f'{channel}.enabled', False)}
+                for channel in ('discord', 'desktop')}
+
+    @app.post('/api/reminders/disarm')
+    def disarm(body: ArmRequest):
+        return {'canceled': store.disarm(body.planId, body.channel)}
 
     @app.post('/api/reminders/settings')
     def reminder_settings(body: ChannelSetting):

@@ -51,6 +51,15 @@ class VaultTests(unittest.TestCase):
 
 
 class ScheduleTests(unittest.TestCase):
+    def test_same_source_task_cannot_be_selected_twice_under_different_line_ids(self):
+        first, second = task(), task('b')
+        second['title'] = first['title']
+        second['line'] = 7
+        with self.assertRaisesRegex(ValueError, 'same source task'):
+            make_plan([first, second], '2026-11-16', 240, NOW)
+        second['source'] = 'Another project.md'
+        self.assertEqual(len(make_plan([first, second], '2026-11-16', 240, NOW)['blocks']), 2)
+
     def test_calendar_busy_times_are_never_overlapped(self):
         busy = [{'start': '2026-11-16T08:00:00+08:00', 'end': '2026-11-16T09:00:00+08:00'}]
         plan = make_plan([task()], '2026-11-16', 240, NOW, busy=busy)
