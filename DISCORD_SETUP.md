@@ -1,8 +1,8 @@
 # Set up Bej in your private Discord bot channel
 
-Status: setup instructions, not a working integration. Bej's Discord adapter has not been implemented or connected. Creating and installing the Discord app prepares the account side; it will not start delivering reminders yet.
+Status: bot credential and destination are configured locally. The explicitly approved generic live test was delivered successfully. Scheduled delivery is implemented through Bej's persistent reminder queue; no personal tasks are armed by setup alone.
 
-Progress: the user has prepared the bot and supplied the server/channel IDs. They are saved as strings in Git-ignored `.bej-local/config.json`, with Discord disabled and delivery unverified. The Bej planner now reads this destination and has a **Connections → Discord → Save token locally** form backed by Windows Credential Manager. Sending reminders is still pending. Do not repeat portal setup, ask for the same IDs, or reset the token merely to continue. No bot connection or test message has been verified.
+Launch **Start-Bej.cmd**, build a draft, then use **Enable Discord reminders for this plan**. The reminder queue persists across restarts, respects 10 PM–6 AM quiet hours, and reports failed/uncertain/missed sends honestly. Use **Connections** to validate access or replace the token in Windows Credential Manager. Never paste the token in chat, Git, or Obsidian.
 
 ## Choose the connection
 
@@ -31,9 +31,9 @@ In Discord **User Settings → Advanced**, turn on **Developer Mode**. Then copy
 
 These IDs identify the destination; the bot token is the secret. [Discord's official ID guide](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID)
 
-## Connect when the adapter is implemented
+## Connect and arm reminders
 
-Launch **Start-Bej.cmd** and open **Connections**. Enter the bot token into the password field and choose **Save token locally**. The backend uses Windows Credential Manager and will report an error rather than fall back to plaintext storage. The nonsecret server/channel IDs are already in local configuration. Saving the token does not enable messaging; reminder delivery remains to be implemented.
+Launch **Start-Bej.cmd** and open **Connections**. Enter the bot token into the password field and choose **Save token locally**. The backend uses Windows Credential Manager and will report an error rather than fall back to plaintext storage. The nonsecret server/channel IDs are already in local configuration. Saving the token does not enable scheduled messaging; explicitly arm a plan after reviewing it.
 
 For outbound reminders, the local process can use Discord's HTTP API. If slash commands are added, a Gateway connection lets the laptop receive Discord events over an outbound WebSocket; that design does not need a public web server or tunnel to the vault. This is the proposed Bej architecture, based on [Discord's Gateway documentation](https://docs.discord.com/developers/events/gateway).
 

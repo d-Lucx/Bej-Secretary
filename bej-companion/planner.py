@@ -78,7 +78,7 @@ def scan_vault(root: Path) -> dict:
             'scannedAt': datetime.now(MANILA).isoformat()}
 
 
-def make_plan(tasks: list[dict], day: str, capacity: int, now: datetime | None = None) -> dict:
+def make_plan(tasks: list[dict], day: str, capacity: int, now: datetime | None = None, *, busy: list[dict] | None = None, work_day_off: bool = False) -> dict:
     selected_day = date.fromisoformat(day)
     now = (now or datetime.now(MANILA)).astimezone(MANILA)
     if selected_day < now.date():
@@ -94,10 +94,32 @@ def make_plan(tasks: list[dict], day: str, capacity: int, now: datetime | None =
             raise ValueError('Assign work or personal to each selected task.')
         if type(task.get('minutes')) is not int or not 5 <= task['minutes'] <= 480:
             raise ValueError('Task estimates must be 5–480 whole minutes.')
-    weekday = selected_day.weekday() < 5
+    weekday = selected_day.weekday() < 5 and not work_day_off
     earliest = now.hour * 60 + now.minute + (1 if now.second or now.microsecond else 0) if selected_day == now.date() else 0
     windows = {'work': [(480, 1020)] if weekday else [],
                'personal': [(360, 480), (1020, 1320)] if weekday else [(360, 1320)]}
+    midnight = datetime.combine(selected_day, datetime.min.time(), MANILA)
+    for event in busy or []:
+        try:
+            start_dt = datetime.fromisoformat(event['start'])
+            end_dt = datetime.fromisoformat(event['end'])
+            if start_dt.tzinfo is None or end_dt.tzinfo is None or end_dt <= start_dt:
+                raise ValueError()
+            start_minutes = max(0, int((start_dt - midnight).total_seconds() // 60))
+            end_minutes = min(1440, int(((end_dt - midnight).total_seconds() + 59) // 60))
+        except (KeyError, TypeError, ValueError):
+            raise ValueError('Calendar availability contains an invalid event. Refresh Outlook before planning.') from None
+        for kind, ranges in windows.items():
+            remaining = []
+            for start, end in ranges:
+                if end_minutes <= start or start_minutes >= end:
+                    remaining.append((start, end))
+                else:
+                    if start < start_minutes:
+                        remaining.append((start, start_minutes))
+                    if end_minutes < end:
+                        remaining.append((end_minutes, end))
+            windows[kind] = remaining
     cursors = {kind: [max(start, earliest) for start, _ in ranges] for kind, ranges in windows.items()}
     blocks, unscheduled, used = [], [], 0
     for task in tasks:

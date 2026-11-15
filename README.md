@@ -2,7 +2,7 @@
 
 Private Windows AI assistant project for [d-Lucx/Bej-Secretary](https://github.com/d-Lucx/Bej-Secretary).
 
-This checkout starts from DomoNote. The first Bej planner increment is implemented through a dedicated local entry point. The upstream feature descriptions below do not establish that all Bej requirements have been implemented or verified.
+This checkout starts from DomoNote. Bej now includes a dedicated local planner, Outlook connection, durable reminder queue, and manual capture workspace. The upstream feature descriptions below do not establish that all Bej requirements have been implemented or verified.
 
 - [Bej Assistant project prompt](BEJ_ASSISTANT_PROMPT.md)
 - [Laptop compatibility and Ollama download status](LAPTOP_COMPATIBILITY.md)
@@ -13,15 +13,15 @@ This checkout starts from DomoNote. The first Bej planner increment is implement
 
 ## Run the Bej planner
 
-On this laptop, double-click **Start-Bej.cmd**, or run `./Start-Bej.ps1` from PowerShell. Keep its process running while using Bej. It opens an authenticated browser session at `http://127.0.0.1:8766`; opening that address in a new browser session without the launcher does not grant access. Reuse the open tab if Bej is already running. Close its console or run `./Stop-Bej.ps1` to stop the local service, then launch again if you need a fresh browser session. Automatic startup and tray behavior are not implemented yet.
+On this laptop, double-click **Start-Bej.cmd**, or run `./Start-Bej.ps1` from PowerShell. Keep its process running while using Bej. It opens an authenticated browser session at `http://127.0.0.1:8766`; opening that address in a new browser session without the launcher does not grant access. Reuse the open tab if Bej is already running. Use the tray icon to reopen an authenticated tab. Quit from the tray, close its console, or run `./Stop-Bej.ps1` to stop the local service. Windows sign-in startup is enabled on this laptop. The tray icon opens Bej, pauses reminders, and quits; recording never starts automatically.
 
 1. Choose **Read my vault**. Reading never changes source notes.
 2. Select candidates in **Source inbox**, choose work/personal, and adjust the visible duration estimates (30 minutes initially).
 3. Choose the date and task capacity (four hours initially, editable), then **Build daily draft**. Overflow remains unscheduled with a reason. Weekday personal tasks stay outside the 8 AM–5 PM work window; all dates use Manila time.
-4. Choose **Save plan to Obsidian** to create a new Markdown file in the vault's separate **Bej Plans** folder. Plans are never imported as new tasks. Repeating save for the same session draft does not create another file. Source notes remain untouched.
+4. Choose **Save plan to Obsidian** to create a new Markdown file in the vault's separate **Bej Plans** folder. Plans are never imported as new tasks. Repeating save for the same persistent draft does not create another file. Source notes remain untouched.
 5. Optionally choose **Explain with local AI**. `qwen2.5:0.5b` is installed and has passed a synthetic-plan smoke test. AI is not the scheduling authority.
 
-Local setup, including the vault path and Discord IDs, is in Git-ignored `.bej-local/config.json`. The **Connections** page can save a Discord token directly into Windows Credential Manager. Token entry does not send a message or enable delivery. Do not paste credentials into chat, Obsidian, or Git.
+Local setup, including the vault path and Discord IDs, is in Git-ignored `.bej-local/config.json`. The **Connections** page can save a Discord token directly into Windows Credential Manager. Token entry does not send a message or enable delivery. The configured bot has passed an explicitly approved generic live delivery test. Do not paste credentials into chat, Obsidian, or Git.
 
 ## Setup on another Windows checkout
 
@@ -37,16 +37,34 @@ npm run build:bej
 
 Create `.bej-local/config.json` with a `vaultPath` pointing to the approved Obsidian vault. The default is the current user's `Documents/Master Vault`. Optional local AI requires Ollama and `ollama pull qwen2.5:0.5b`. No model is downloaded automatically on app load. The dedicated Bej build has no marketing pages, extension-installation endpoints, remote fonts, analytics, or external asset dependencies.
 
-## Current limits
+## Outlook and reminders
 
-- **Working:** read-only Markdown checkbox discovery with citations and scan warnings, explicit task selection, deterministic work/personal drafts, overflow, separate Markdown saves, authenticated loopback API, and optional local-AI explanations.
-- **Not yet implemented:** Outlook authentication/read/create/update, scheduled Discord delivery, desktop reminders, source-note approval/write-back, durable schedule rescheduling, holiday/vacation overrides, Windows startup/tray, and meeting/screen capture. These remain project requirements. The connections page labels them pending; nothing is sent to Discord or Outlook.
-- **Draft lifetime:** drafts remain in the current service session until saved as Markdown. A server restart clears unsaved drafts. This version does not automatically read back saved plans into the UI.
-- **Manual recording:** no recording is active or automatically started; recording features themselves are still to be added.
+Outlook is signed in with the personal Microsoft account and the separate **Bej** calendar has been created/reused. Calendar reads and the saved sign-in were verified after restart. No personal task events have been published during setup.
 
-Verification: `npm test`, `npm run build:bej`, and `./.bej-local/venv/Scripts/python.exe -m unittest discover -s bej-companion -p 'test_*.py'`. On restricted sandboxes the API tests require normal Windows thread/socket access. An optional Windows symlink fixture is skipped if developer-mode permissions are unavailable.
+- In **Connections**, refresh Outlook availability for the plan date, then rebuild the draft to avoid busy events.
+- In **Today**, choose **Preview Outlook task blocks**, review the exact titles/times, and approve that batch. Bej only creates/updates its owned blocks; no invitations, deletions, or unrelated event edits. External changes are checked again before writes. Cyclic batch moves require separate approvals rather than unapproved temporary moves.
+- Enable **Discord reminders for this plan** or **desktop reminders** explicitly. Alerts occur at block start and respect 10 PM–6 AM quiet hours. The queue survives restart, expires alerts over 30 minutes late, and marks uncertain sends for review rather than risking duplicate posts.
+- **Reminders** shows per-item status and cancellation. The laptop must remain awake and running Bej; Discord and Outlook additionally need internet.
+- Use **Plans changed? Protect some time** to rearrange flexible local tasks around a new unavailable window. Already-pending per-task reminders follow the changes; canceled reminders stay canceled. Outlook changes still require a new preview/approval.
+- **Holiday / no work on this date** is a date-scoped override; personal time remains inside the sleep-protected day.
 
-The official Ollama installer is downloaded under `downloads/` and excluded from Git. Ollama 0.40.16 is installed. Actual-vault scan verification found 17 notes / 66 candidates and identical note hashes before and after; no personal plan has been written by automated verification. Only synthetic fixtures were used for plan-save and AI tests.
+## Source edits and manual capture
+
+**Source inbox → Propose task edit** creates an exact before/after preview. Only **Approve this source edit** writes the existing checkbox line. Stale approvals are rejected; original bytes are backed up privately. External editors can still race within the final check/replace interval, so avoid simultaneous edits to the same note.
+
+**Manual capture** offers explicit microphone recording or selected-screen video. Capture never starts at sign-in or on an app/calendar event. Stop/pause controls remain visible, sessions are capped at five minutes/45 MiB in the browser, and uploads at 50 MiB. Review before saving. Saved recordings can be played/downloaded and explicitly deleted with their transcript. Retention is **until explicit deletion**, with no automatic purge.
+
+Microphone recordings can be transcribed using the installed local tiny Whisper model. The local speech test recognized a synthetic sentence in approximately 3.9 seconds, without microphone access or cloud transcription. Screen recording currently has no audio; transcription is offered for microphone recordings. Pin `av==16.0.1`: the latest PyAV release removed an argument Faster-Whisper 1.2.1 requires.
+
+## Current limits and verification
+
+Drafts and reminder states persist in private SQLite; **Open a saved draft** restores one in the UI. Calendar availability is cached, dated, and visibly marked stale offline. Source/recording data, credentials, model caches, and generated plans are excluded from Git.
+
+Still future: manual webpage-to-note capture (selected in FUTURE_IMPROVEMENTS.md), screenshot OCR/SOP generation, document-format ingestion in the dedicated Bej UI, richer meeting summaries/action extraction, and custom travel/overnight availability rules. Routine quiet hours remain fixed at 10 PM–6 AM unless an explicit future notification-exception policy is configured. This is a usable first assistant, not a claim that every roadmap capability is complete.
+
+Verification: `npm test`, `npm run build:bej`, and `./.bej-local/venv/Scripts/python.exe -m unittest discover -s bej-companion -p 'test_*.py'`. Restricted sandboxes may require normal Windows thread/socket access for API tests. Windows link fixtures are skipped where OS permissions forbid creating links.
+
+Bej's app registration/calendar integration does not require paid Azure hosting or Entra premium. Standard Graph APIs are available without an additional API charge within normal usage limits. Other Azure resources or premium products can generate separate charges; this project does not deploy them. See [Microsoft Entra ID Free](https://learn.microsoft.com/en-us/azure/cost-management-billing/manage/microsoft-entra-id-free) and [Graph API metering](https://learn.microsoft.com/en-us/graph/metered-api-overview).
 
 ## Upstream DomoNote documentation
 

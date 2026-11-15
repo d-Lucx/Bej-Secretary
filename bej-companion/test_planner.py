@@ -51,6 +51,16 @@ class VaultTests(unittest.TestCase):
 
 
 class ScheduleTests(unittest.TestCase):
+    def test_calendar_busy_times_are_never_overlapped(self):
+        busy = [{'start': '2026-11-16T08:00:00+08:00', 'end': '2026-11-16T09:00:00+08:00'}]
+        plan = make_plan([task()], '2026-11-16', 240, NOW, busy=busy)
+        self.assertEqual(plan['blocks'][0]['start'], '09:00')
+
+    def test_explicit_work_day_off_allows_daytime_personal_tasks(self):
+        plan = make_plan([task('p', 'personal', 180), task()], '2026-11-16', 240, NOW, work_day_off=True)
+        self.assertEqual(plan['blocks'][0]['start'], '07:00')
+        self.assertEqual(plan['unscheduled'][0]['category'], 'work')
+
     def test_work_uses_weekday_window_and_capacity_leaves_overflow(self):
         plan = make_plan([task('a', minutes=60), task('b', minutes=60)], '2026-11-16', 60, NOW)
         self.assertEqual(plan['blocks'][0]['start'], '08:00')

@@ -7,6 +7,7 @@ import threading
 import webbrowser
 from datetime import datetime
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 import requests
 from fastapi import FastAPI, HTTPException, Request
@@ -16,6 +17,16 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from planner import MANILA, make_plan, save_plan, scan_vault
+from credentials import WindowsSecrets
+from discord_adapter import DiscordAdapter, DiscordError
+from outlook_adapter import OutlookAdapter
+from reminders import ReminderWorker, carry_forward_reminders
+from source_edits import SourceEditor
+from state import LocalStore
+from windows_integration import WindowsIntegration
+from captures import CaptureStore
+from transcription import LocalTranscriber
+from reflow import reflow_plan
 
 ORIGIN = 'http://127.0.0.1:8766'
 MODEL = 'qwen2.5:0.5b'
@@ -46,14 +57,75 @@ class Secret(Input):
     token: str = Field(min_length=20, max_length=300)
 
 
-def create_app(project: Path, token: str, vault: Path | None = None) -> FastAPI:
+class ClientID(Input):
+    clientId: str = Field(min_length=36, max_length=36)
+
+
+class DayRequest(Input):
+    date: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+
+
+class Approval(Input):
+    previewId: str = Field(max_length=64)
+
+
+class ArmRequest(PlanID):
+    channel: str = Field(pattern='^(discord|desktop)$')
+
+
+class ChannelSetting(Input):
+    channel: str = Field(pattern='^(discord|desktop)$')
+    enabled: bool = Field(strict=True)
+
+
+class DayOverride(DayRequest):
+    workDayOff: bool = Field(strict=True)
+
+
+class SourceEditRequest(Input):
+    taskId: str = Field(max_length=64)
+    text: str | None = Field(default=None, max_length=1000)
+    completed: bool | None = Field(default=None, strict=True)
+
+
+class StartupSetting(Input):
+    enabled: bool = Field(strict=True)
+
+
+class PlanChange(PlanID):
+    start: str = Field(pattern=r'^\d{2}:\d{2}$')
+    end: str = Field(pattern=r'^\d{2}:\d{2}$')
+    reason: str = Field(min_length=1, max_length=160)
+
+
+def create_app(project: Path, token: str, vault: Path | None = None, *, credential_store=None, enable_worker=True) -> FastAPI:
     project = project.resolve()
     config_path = project / '.bej-local' / 'config.json'
     config = json.loads(config_path.read_text(encoding='utf-8-sig')) if config_path.exists() else {}
     vault = vault or Path(config.get('vaultPath', str(Path.home() / 'Documents' / 'Master Vault')))
-    app = FastAPI(title='Bej Local', docs_url=None, redoc_url=None, openapi_url=None)
-    plans: dict[str, dict] = {}
-    saved: dict[str, str] = {}
+    local_dir = project / '.bej-local'
+    store = LocalStore(local_dir)
+    secret_store = credential_store or WindowsSecrets()
+    discord_config = config.get('discord', {})
+    discord = DiscordAdapter(secret_store, discord_config.get('guildId', ''), discord_config.get('channelId', ''))
+    outlook = OutlookAdapter(local_dir, secret_store)
+    desktop = WindowsIntegration(project, local_dir)
+    captures = CaptureStore(local_dir)
+    transcriber = LocalTranscriber(captures, local_dir)
+    def source_task_is_current(task_id):
+        return any(task['id'] == task_id for task in scan_vault(vault)['tasks'])
+    worker = ReminderWorker(store, discord, desktop, task_is_current=source_task_is_current)
+    editor = None
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        if enable_worker:
+            worker.start()
+        yield
+        if enable_worker:
+            worker.stop()
+
+    app = FastAPI(title='Bej Local', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     io_lock = threading.Lock()
     ai_lock = threading.Lock()
     local_http = requests.Session()
@@ -70,7 +142,8 @@ def create_app(project: Path, token: str, vault: Path | None = None) -> FastAPI:
             if not secrets.compare_digest(request.headers.get('authorization', ''), f'Bearer {token}'):
                 return JSONResponse({'detail': 'Open Bej using Start-Bej.ps1 to authenticate this session.'}, status_code=401)
             try:
-                if int(request.headers.get('content-length', '0')) > 65536:
+                limit = CaptureStore.MAX_BYTES if request.url.path.startswith('/api/captures/upload/') else 65536
+                if int(request.headers.get('content-length', '0')) > limit:
                     return JSONResponse({'detail': 'Request is too large.'}, status_code=413)
             except ValueError:
                 return JSONResponse({'detail': 'Invalid request size.'}, status_code=400)
@@ -78,7 +151,7 @@ def create_app(project: Path, token: str, vault: Path | None = None) -> FastAPI:
         response.headers['Cache-Control'] = 'no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
-        response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+        response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         return response
 
     @app.exception_handler(ValueError)
@@ -90,6 +163,10 @@ def create_app(project: Path, token: str, vault: Path | None = None) -> FastAPI:
         # Pydantic errors can include the input: never echo a submitted credential.
         return JSONResponse({'detail': 'Invalid input. Check the selected date, task estimates, or credential length.'}, status_code=422)
 
+    @app.exception_handler(DiscordError)
+    async def discord_error(_request: Request, error: DiscordError):
+        return JSONResponse({'detail': str(error), 'uncertain': error.uncertain}, status_code=503)
+
     @app.get('/api/status')
     def status():
         ollama = {'available': False, 'modelReady': False, 'model': MODEL}
@@ -100,13 +177,11 @@ def create_app(project: Path, token: str, vault: Path | None = None) -> FastAPI:
             ollama['modelReady'] = any(m.get('name') == MODEL for m in response.json().get('models', []))
         except (requests.RequestException, ValueError):
             pass
-        discord = config.get('discord', {})
         return {'vaultPath': str(vault), 'vaultName': vault.name, 'vaultExists': vault.is_dir(), 'timezone': 'Asia/Manila',
                 'today': datetime.now(MANILA).date().isoformat(), 'ollama': ollama,
-                'discord': {'destinationConfigured': bool(discord.get('guildId') and discord.get('channelId')),
-                            'deliveryVerified': False, 'scheduledDelivery': False},
-                'outlook': {'connected': False, 'calendar': 'Bej', 'account': 'Personal Microsoft',
-                            'status': 'Authentication and approval-controlled sync are pending.'}}
+                'discord': {**discord.status(), 'deliveryVerified': bool(store.setting('discord.deliveryVerified', False)),
+                            'scheduledDelivery': True, 'enabled': store.setting('discord.enabled', False)},
+                'outlook': outlook.status(), 'desktop': desktop.status()}
 
     def read_tasks():
         try:
@@ -127,19 +202,59 @@ def create_app(project: Path, token: str, vault: Path | None = None) -> FastAPI:
             if not current or current['fingerprint'] != selection.fingerprint:
                 raise HTTPException(409, 'A source note changed. Rescan and review the task before planning.')
             selected.append({**current, 'category': selection.category, 'minutes': selection.minutes})
-        result = make_plan(selected, body.date, body.capacity)
+        calendar = outlook.planning_busy(body.date, [task['id'] for task in selected])
+        extra_busy = store.setting(f'unavailable.{body.date}', [])
+        result = make_plan(selected, body.date, body.capacity, busy=[*calendar['busy'], *extra_busy],
+                           work_day_off=store.setting(f'dayOff.{body.date}', False))
+        result['calendarStale'] = bool(outlook.status()['configured'] and calendar['stale'])
+        result['calendarLastSyncedAt'] = calendar['lastSyncedAt']
         with io_lock:
-            if len(plans) >= 100:
-                raise HTTPException(409, 'This session has 100 drafts. Restart Bej before creating more.')
-            plans[result['id']] = result
+            store.put_plan(result)
         return result
+
+    @app.post('/api/plan/reflow')
+    def reflow(body: PlanChange):
+        original = store.get_plan(body.planId)
+        if not original:
+            raise HTTPException(404, 'Draft not found.')
+        latest = {task['id']: task for task in read_tasks()['tasks']}
+        for task in original['blocks'] + original['unscheduled']:
+            if task['id'] not in latest or task.get('fingerprint') != latest[task['id']]['fingerprint']:
+                raise HTTPException(409, 'A source task changed. Rescan before rearranging this plan.')
+        calendar = outlook.planning_busy(original['date'], [task['id'] for task in original['blocks'] + original['unscheduled']])
+        old_windows = store.setting(f"unavailable.{original['date']}", [])
+        result = reflow_plan(original, body.start, body.end, body.reason,
+                             busy=[*calendar['busy'], *old_windows],
+                             work_day_off=store.setting(f"dayOff.{original['date']}", False))
+        result['calendarStale'] = bool(outlook.status()['configured'] and calendar['stale'])
+        blocked = result['change']['unavailable']
+        if blocked not in old_windows:
+            if len(old_windows) >= 24:
+                raise ValueError('This date already has 24 unavailable windows.')
+            store.set_setting(f"unavailable.{original['date']}", [*old_windows, blocked])
+        store.put_plan(result)
+        carry_forward_reminders(store, body.planId, result)
+        store.audit('plan.reflow', result['change'])
+        return result
+
+    @app.get('/api/plans')
+    def plan_list():
+        return {'plans': store.list_plans()}
+
+    @app.get('/api/plans/{plan_id}')
+    def plan_detail(plan_id: str):
+        result = store.get_plan(plan_id)
+        if not result:
+            raise HTTPException(404, 'Draft not found.')
+        return {**result, 'savedPath': store.saved_path(plan_id)}
 
     @app.post('/api/plans/save')
     def save(body: PlanID):
         with io_lock:
-            if body.planId in saved:
-                return {'path': saved[body.planId], 'sourceNotesChanged': False}
-            result = plans.get(body.planId)
+            previous_path = store.saved_path(body.planId)
+            if previous_path and Path(previous_path).is_file():
+                return {'path': previous_path, 'sourceNotesChanged': False}
+            result = store.get_plan(body.planId)
             if not result:
                 raise HTTPException(404, 'Draft not found in this session. Generate it again.')
             latest = {task['id']: task for task in read_tasks()['tasks']}
@@ -151,12 +266,13 @@ def create_app(project: Path, token: str, vault: Path | None = None) -> FastAPI:
                 path = save_plan(vault, result)
             except OSError:
                 raise HTTPException(400, 'Could not save the plan. Check folder access and available storage.')
-            saved[body.planId] = str(path)
+            store.set_saved_path(body.planId, str(path))
+            store.audit('plan.saved', {'planId': body.planId})
             return {'path': str(path), 'sourceNotesChanged': False}
 
     @app.post('/api/ai/explain')
     def explain(body: PlanID):
-        result = plans.get(body.planId)
+        result = store.get_plan(body.planId)
         if not result:
             raise HTTPException(404, 'Generate a draft first.')
         if not ai_lock.acquire(blocking=False):
@@ -180,14 +296,166 @@ def create_app(project: Path, token: str, vault: Path | None = None) -> FastAPI:
 
     @app.post('/api/discord/credential')
     def discord_credential(body: Secret):
-        from keyring.backends.Windows import WinVaultKeyring
-        # No plaintext or alternate backend fallback for credentials.
-        backend = WinVaultKeyring()
         try:
-            backend.set_password('Bej-Secretary', 'discord-bot', body.token.strip())
+            secret_store.set('discord-bot', body.token.strip())
         except Exception:
             raise HTTPException(503, 'Windows credential storage is unavailable. No token was saved.')
         return {'stored': True, 'message': 'Stored locally in Windows Credential Manager. No message sent.'}
+
+    @app.post('/api/discord/validate')
+    def discord_validate():
+        return discord.validate()
+
+    @app.post('/api/discord/test')
+    def discord_test():
+        result = discord.test_message()
+        store.set_setting('discord.deliveryVerified', True)
+        return result
+
+    @app.get('/api/reminders')
+    def reminders():
+        return {'reminders': store.reminders(), 'discordEnabled': store.setting('discord.enabled', False),
+                'desktopEnabled': store.setting('desktop.enabled', False)}
+
+    @app.post('/api/reminders/arm')
+    def arm(body: ArmRequest):
+        result = store.get_plan(body.planId)
+        if not result:
+            raise HTTPException(404, 'Draft not found.')
+        if body.channel == 'discord':
+            discord.validate()
+        elif not worker.desktop:
+            raise ValueError('Desktop reminders are not configured yet.')
+        ids = store.arm(result, body.channel)
+        store.set_setting(f'{body.channel}.enabled', True)
+        return {'armed': len(ids), 'channel': body.channel, 'quietHours': '22:00–06:00 Asia/Manila'}
+
+    @app.post('/api/reminders/settings')
+    def reminder_settings(body: ChannelSetting):
+        store.set_setting(f'{body.channel}.enabled', body.enabled)
+        return {'enabled': body.enabled, 'channel': body.channel}
+
+    @app.post('/api/reminders/{reminder_id}/cancel')
+    def cancel_reminder(reminder_id: str):
+        store.cancel(reminder_id)
+        return {'canceled': True}
+
+    @app.post('/api/outlook/configure')
+    def outlook_configure(body: ClientID):
+        return outlook.configure(body.clientId)
+
+    @app.post('/api/outlook/login')
+    def outlook_login():
+        return outlook.begin_login()
+
+    @app.post('/api/outlook/sync')
+    def outlook_sync(body: DayRequest):
+        return outlook.sync(body.date)
+
+    @app.post('/api/outlook/preview')
+    def outlook_preview(body: PlanID):
+        result = store.get_plan(body.planId)
+        if not result:
+            raise HTTPException(404, 'Draft not found.')
+        return outlook.preview(result)
+
+    @app.post('/api/outlook/publish')
+    def outlook_publish(body: Approval):
+        result = outlook.publish(body.previewId)
+        store.audit('outlook.publish', {'previewId': body.previewId, 'success': result.get('success')})
+        return result
+
+    @app.get('/api/day-override/{day}')
+    def day_override(day: str):
+        return {'date': day, 'workDayOff': store.setting(f'dayOff.{day}', False)}
+
+    @app.post('/api/day-override')
+    def set_day_override(body: DayOverride):
+        from datetime import date
+        date.fromisoformat(body.date)
+        store.set_setting(f'dayOff.{body.date}', body.workDayOff)
+        return {'date': body.date, 'workDayOff': body.workDayOff}
+
+    @app.post('/api/source-edits/preview')
+    def source_preview(body: SourceEditRequest):
+        nonlocal editor
+        if editor is None:
+            editor = SourceEditor(vault, local_dir)
+        current = next((task for task in read_tasks()['tasks'] if task['id'] == body.taskId), None)
+        if not current:
+            raise HTTPException(409, 'The task changed. Rescan before editing.')
+        return editor.preview(current, text=body.text, completed=body.completed)
+
+    @app.post('/api/source-edits/apply')
+    def source_apply(body: Approval):
+        if editor is None:
+            raise ValueError('Preview an exact task edit first.')
+        result = editor.apply(body.previewId)
+        store.audit('source.edit', {'source': result['source'], 'line': result['line']})
+        return result
+
+    @app.post('/api/desktop/startup')
+    def desktop_startup(body: StartupSetting):
+        return desktop.enable_startup(body.enabled)
+
+    @app.get('/api/captures')
+    def capture_list():
+        return {'captures': captures.list(), 'retention': 'Kept locally until you explicitly delete them.'}
+
+    @app.post('/api/captures/upload/{kind}')
+    async def capture_upload(kind: str, request: Request):
+        import tempfile
+        import os
+        descriptor, temporary = tempfile.mkstemp(prefix='.capture-upload-', dir=local_dir)
+        try:
+            total = 0
+            with os.fdopen(descriptor, 'wb') as output:
+                async for chunk in request.stream():
+                    total += len(chunk)
+                    if total > CaptureStore.MAX_BYTES:
+                        raise ValueError('Recording exceeds the 50 MiB upload limit.')
+                    output.write(chunk)
+            with open(temporary, 'rb') as source:
+                result = captures.save(kind, iter(lambda: source.read(65536), b''), request.headers.get('content-type', ''))
+            store.audit('capture.saved', {'id': result['id'], 'kind': kind})
+            return result
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+
+    @app.get('/api/captures/{capture_id}/media')
+    def capture_media(capture_id: str):
+        path, mime = captures.file(capture_id)
+        return FileResponse(path, media_type=mime, filename=path.name)
+
+    @app.post('/api/captures/{capture_id}/delete')
+    def capture_delete(capture_id: str):
+        if not ai_lock.acquire(blocking=False):
+            raise ValueError('Wait for local AI or transcription to finish before deleting recordings.')
+        try:
+            try:
+                return captures.delete(capture_id)
+            finally:
+                transcriber.delete_transcript(capture_id)
+        finally:
+            ai_lock.release()
+
+    @app.post('/api/transcription/prepare')
+    def prepare_transcription():
+        if not ai_lock.acquire(blocking=False):
+            raise ValueError('Local AI or transcription is already running.')
+        try:
+            return transcriber.prepare_model()
+        finally:
+            ai_lock.release()
+
+    @app.post('/api/captures/{capture_id}/transcribe')
+    def transcribe(capture_id: str):
+        if not ai_lock.acquire(blocking=False):
+            raise ValueError('Local AI or transcription is already running.')
+        try:
+            return transcriber.transcribe(capture_id)
+        finally:
+            ai_lock.release()
 
     @app.get('/')
     def index():
@@ -206,16 +474,41 @@ if __name__ == '__main__':
     import argparse
     import os
     import socket
+    import sys
+    import hashlib
     import uvicorn
     parser = argparse.ArgumentParser()
     parser.add_argument('--no-open', action='store_true')
     args = parser.parse_args()
     project = Path(__file__).resolve().parent.parent
+    private_dir = project / '.bej-local'
+    private_dir.mkdir(exist_ok=True)
+    os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
+    os.environ['DO_NOT_TRACK'] = '1'
+    if sys.stdout is None or sys.stderr is None:
+        log_file = open(private_dir / 'runtime.log', 'a', encoding='utf-8')
+        sys.stdout = sys.stderr = log_file
+    # A per-checkout mutex prevents two simultaneous login/manual starts.
+    if os.name == 'nt':
+        import ctypes
+        from ctypes import wintypes
+        create_mutex = ctypes.windll.kernel32.CreateMutexW
+        create_mutex.restype = wintypes.HANDLE
+        create_mutex.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+        mutex_name = 'Local\\Bej-Secretary-' + hashlib.sha256(str(project).encode()).hexdigest()[:16]
+        mutex = create_mutex(None, False, mutex_name)
+        if ctypes.windll.kernel32.GetLastError() == 183:
+            if not args.no_open:
+                existing = WindowsSecrets().get('runtime-session')
+                if existing:
+                    webbrowser.open(f'{ORIGIN}/#token={existing}')
+            raise SystemExit('Bej is already running. Open it from the tray icon.')
     with socket.socket() as probe:
         probe.settimeout(0.5)
         if probe.connect_ex(('127.0.0.1', 8766)) == 0:
             raise SystemExit('Port 8766 is already in use. Reuse the open Bej tab, or stop Bej before launching again.')
     token = secrets.token_urlsafe(32)
+    WindowsSecrets().set('runtime-session', token)
     app = create_app(project, token)
     runtime_pid = project / '.bej-local' / 'runtime.pid'
     runtime_pid.parent.mkdir(exist_ok=True)
@@ -224,8 +517,19 @@ if __name__ == '__main__':
         # Fragment never reaches the HTTP server or its access logs.
         threading.Timer(1.5, lambda: webbrowser.open(f'{ORIGIN}/#token={token}')).start()
     print('Bej local workspace: http://127.0.0.1:8766 — keep this process running.')
+    service = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=8766, access_log=False))
+    tray_icon = None
     try:
-        uvicorn.run(app, host='127.0.0.1', port=8766, access_log=False)
+        from tray import start_tray
+        def pause_all():
+            local_store = LocalStore(private_dir)
+            local_store.set_setting('discord.enabled', False)
+            local_store.set_setting('desktop.enabled', False)
+        tray_icon = start_tray(lambda: webbrowser.open(f'{ORIGIN}/#token={token}'), pause_all,
+                               lambda: setattr(service, 'should_exit', True))
+        service.run()
     finally:
+        if tray_icon:
+            tray_icon.stop()
         if runtime_pid.exists() and runtime_pid.read_text(encoding='utf-8') == str(os.getpid()):
             runtime_pid.unlink()
