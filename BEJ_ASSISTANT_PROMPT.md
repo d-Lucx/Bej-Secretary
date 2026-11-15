@@ -4,6 +4,8 @@ Status: project requirements, November 14, 2026. The local planner, connectors, 
 
 Project repository: [d-Lucx/Bej-Secretary](https://github.com/d-Lucx/Bej-Secretary). DomoNote is the upstream reference, not the destination repository.
 
+Development workflow: the user authorized automatic commits and pushes of verified changes to the project repository. Preserve this authorization across sessions; do not repeatedly ask for push approval or publish private local state.
+
 ## Mission
 
 Build Bej Assistant, my private, local AI secretary for Windows. Help me turn Obsidian notes, added documents, and explicitly captured work into a realistic daily plan. Keep track of commitments, remind me at useful times, and adapt when priorities, emergencies, or availability change.
